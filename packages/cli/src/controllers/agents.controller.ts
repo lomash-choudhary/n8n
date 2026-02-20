@@ -248,11 +248,16 @@ export class AgentsController {
 
 	@Post('/:agentId/task', { apiKeyAuth: true })
 	async dispatchTask(req: AuthenticatedRequest, res: Response, @Param('agentId') agentId: string) {
-		const { prompt } = req.body as { prompt: string };
+		const { prompt, llmApiKey } = req.body as { prompt: string; llmApiKey?: string };
 		const wantsStream = req.headers.accept?.includes('text/event-stream');
 
 		if (!wantsStream) {
-			return await this.executeAgentTask(agentId, prompt, { remaining: MAX_ITERATIONS });
+			return await this.executeAgentTask(
+				agentId,
+				prompt,
+				{ remaining: MAX_ITERATIONS },
+				{ llmApiKey },
+			);
 		}
 
 		res.writeHead(200, {
@@ -265,7 +270,7 @@ export class AgentsController {
 			agentId,
 			prompt,
 			{ remaining: MAX_ITERATIONS },
-			(event) => sseWrite(res, event),
+			{ onStep: (event) => sseWrite(res, event), llmApiKey },
 		);
 
 		sseWrite(res, { type: 'done', status: result.status, summary: result.summary });
@@ -277,8 +282,10 @@ export class AgentsController {
 		agentId: string,
 		prompt: string,
 		budget: IterationBudget,
-		onStep?: StepCallback,
+		options?: { onStep?: StepCallback; llmApiKey?: string },
 	): Promise<{ status: string; summary?: string; steps: TaskStep[]; message?: string }> {
+		const { onStep, llmApiKey } = options ?? {};
+
 		const agentUser = await this.userRepository.findOne({
 			where: { id: agentId },
 			relations: ['role'],
@@ -288,11 +295,12 @@ export class AgentsController {
 			throw new NotFoundError(`Agent ${agentId} not found`);
 		}
 
-		if (!LLM_API_KEY) {
+		const effectiveLlmKey = llmApiKey || LLM_API_KEY;
+		if (!effectiveLlmKey) {
 			return {
 				status: 'error',
 				message:
-					'N8N_AGENT_LLM_API_KEY not configured. Set the environment variable to enable agent tasks.',
+					'No LLM API key available. Provide llmApiKey in the request body or set N8N_AGENT_LLM_API_KEY.',
 				steps: [],
 			};
 		}
@@ -340,7 +348,7 @@ export class AgentsController {
 		while (budget.remaining > 0) {
 			budget.remaining--;
 
-			const llmResponse = await callLlm(messages);
+			const llmResponse = await callLlm(messages, effectiveLlmKey);
 			messages.push({ role: 'assistant', content: llmResponse });
 
 			// Strip markdown code fences if present
@@ -451,12 +459,10 @@ export class AgentsController {
 					});
 				} else {
 					try {
-						const result = await this.executeAgentTask(
-							targetAgent.id,
-							parsed.message,
-							budget,
+						const result = await this.executeAgentTask(targetAgent.id, parsed.message, budget, {
 							onStep,
-						);
+							llmApiKey,
+						});
 						const observation = `Agent "${parsed.toAgent}" responded: ${result.summary ?? 'No summary'}`;
 						const stepResult = result.status === 'completed' ? 'success' : 'failed';
 						steps[steps.length - 1].result = stepResult;
@@ -694,7 +700,8 @@ When the task is complete (after seeing all results):
 If asked to run something multiple times, execute it once, wait for the result, then execute again.`;
 }
 
-export async function callLlm(messages: LlmMessage[]): Promise<string> {
+export async function callLlm(messages: LlmMessage[], apiKey?: string): Promise<string> {
+	const effectiveKey = apiKey || LLM_API_KEY;
 	// Extract system message — Anthropic puts it as a top-level param
 	const systemMessage = messages.find((m) => m.role === 'system')?.content ?? '';
 	const conversationMessages = messages
@@ -705,7 +712,7 @@ export async function callLlm(messages: LlmMessage[]): Promise<string> {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			'x-api-key': LLM_API_KEY,
+			'x-api-key': effectiveKey,
 			'anthropic-version': '2023-06-01',
 		},
 		body: JSON.stringify({

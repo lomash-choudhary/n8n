@@ -207,7 +207,7 @@ test.describe('Agent Task Streaming', () => {
 		console.log('\n--- SSE Stream Events ---');
 		for (const event of events) {
 			// eslint-disable-next-line no-console
-			console.log(`  ${event.type}: ${JSON.stringify(event)}`);
+			console.log(`  ${String(event.type)}: ${JSON.stringify(event)}`);
 		}
 		// eslint-disable-next-line no-console
 		console.log('--- End Stream ---\n');
@@ -418,6 +418,181 @@ test.describe('Agent Task Execution', () => {
 		const task = await unwrap<{ status: string; message: string }>(response);
 
 		expect(task.status).toBe('error');
-		expect(task.message).toContain('N8N_AGENT_LLM_API_KEY');
+		expect(task.message).toContain('No LLM API key available');
+	});
+});
+
+test.describe('BYOK (Bring Your Own Key)', () => {
+	test('should execute task using caller-provided LLM key', async ({
+		agent,
+		agentProject,
+		agentLlmApiKey,
+		api,
+		externalRequest,
+	}) => {
+		test.skip(!agentLlmApiKey, 'N8N_AGENT_LLM_API_KEY not set — skipping LLM tests');
+		test.setTimeout(180_000);
+
+		await api.projects.addUserToProject(agentProject.id, agent.id, 'project:editor');
+
+		const workflowName = `BYOK E2E Workflow ${nanoid(8)}`;
+		const workflow = await api.workflows.createWorkflow({
+			name: workflowName,
+			nodes: [
+				{
+					id: nanoid(),
+					name: 'When clicking "Test workflow"',
+					type: 'n8n-nodes-base.manualTrigger',
+					typeVersion: 1,
+					position: [250, 300],
+					parameters: {},
+				},
+				{
+					id: nanoid(),
+					name: 'Set',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					position: [450, 300],
+					parameters: {
+						assignments: {
+							assignments: [
+								{
+									id: nanoid(),
+									name: 'result',
+									value: 'BYOK result',
+									type: 'string',
+								},
+							],
+						},
+					},
+				},
+			],
+			connections: {
+				'When clicking "Test workflow"': {
+					main: [[{ node: 'Set', type: 'main', index: 0 }]],
+				},
+			},
+		});
+
+		await api.workflows.transfer(workflow.id, agentProject.id);
+
+		// Pass the LLM key in the request body instead of relying on server env var
+		const response = await externalRequest.post(`/rest/agents/${agent.id}/task`, {
+			data: {
+				prompt: `Execute the workflow named "${workflowName}" and report the result.`,
+				llmApiKey: agentLlmApiKey,
+			},
+		});
+
+		expect(response.ok()).toBe(true);
+
+		const task = await unwrap<{
+			status: string;
+			summary: string;
+			steps: Array<{ action: string; workflowName?: string; result?: string }>;
+		}>(response);
+
+		expect(task.status).toBe('completed');
+		expect(task.steps.length).toBeGreaterThan(0);
+
+		const executionStep = task.steps.find((s) => s.action === 'execute_workflow');
+		expect(executionStep).toBeTruthy();
+		expect(executionStep!.workflowName).toBe(workflowName);
+	});
+
+	test('should stream SSE events using caller-provided LLM key', async ({
+		agent,
+		agentProject,
+		agentLlmApiKey,
+		api,
+		backendUrl,
+		ownerApiKey,
+	}) => {
+		test.skip(!agentLlmApiKey, 'N8N_AGENT_LLM_API_KEY not set — skipping LLM tests');
+		test.setTimeout(180_000);
+
+		await api.projects.addUserToProject(agentProject.id, agent.id, 'project:editor');
+
+		const workflowName = `BYOK Stream Workflow ${nanoid(8)}`;
+		const workflow = await api.workflows.createWorkflow({
+			name: workflowName,
+			nodes: [
+				{
+					id: nanoid(),
+					name: 'When clicking "Test workflow"',
+					type: 'n8n-nodes-base.manualTrigger',
+					typeVersion: 1,
+					position: [250, 300],
+					parameters: {},
+				},
+				{
+					id: nanoid(),
+					name: 'Set',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					position: [450, 300],
+					parameters: {
+						assignments: {
+							assignments: [
+								{
+									id: nanoid(),
+									name: 'result',
+									value: 'BYOK streamed',
+									type: 'string',
+								},
+							],
+						},
+					},
+				},
+			],
+			connections: {
+				'When clicking "Test workflow"': {
+					main: [[{ node: 'Set', type: 'main', index: 0 }]],
+				},
+			},
+		});
+
+		await api.workflows.transfer(workflow.id, agentProject.id);
+
+		const response = await fetch(`${backendUrl}/rest/agents/${agent.id}/task`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Accept: 'text/event-stream',
+				'x-n8n-api-key': ownerApiKey.rawApiKey,
+			},
+			body: JSON.stringify({
+				prompt: `Execute the workflow named "${workflowName}" and report the result.`,
+				llmApiKey: agentLlmApiKey,
+			}),
+		});
+
+		expect(response.ok).toBe(true);
+		expect(response.headers.get('content-type')).toContain('text/event-stream');
+
+		const body = await response.text();
+		const events = parseSseEvents(body);
+
+		expect(events.length).toBeGreaterThanOrEqual(3);
+		expect(events[0].type).toBe('step');
+
+		const doneEvent = events[events.length - 1];
+		expect(doneEvent.type).toBe('done');
+		expect(doneEvent.status).toBe('completed');
+	});
+
+	test('should reject task with invalid caller-provided LLM key', async ({
+		agent,
+		externalRequest,
+	}) => {
+		const response = await externalRequest.post(`/rest/agents/${agent.id}/task`, {
+			data: {
+				prompt: 'Hello',
+				llmApiKey: 'sk-invalid-key-that-should-fail',
+			},
+		});
+
+		// The LLM call fails with invalid key — n8n surfaces this as a 500
+		expect(response.status()).toBe(500);
 	});
 });
