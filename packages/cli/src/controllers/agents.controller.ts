@@ -46,6 +46,13 @@ const SUPPORTED_TRIGGERS: Record<string, string> = {
 	[SCHEDULE_TRIGGER_NODE_TYPE]: 'Schedule Trigger',
 };
 
+export interface ExternalAgentConfig {
+	name: string;
+	description?: string;
+	url: string;
+	apiKey: string;
+}
+
 interface LlmMessage {
 	role: 'system' | 'user' | 'assistant';
 	content: string;
@@ -248,14 +255,23 @@ export class AgentsController {
 
 	@Post('/:agentId/task', { apiKeyAuth: true })
 	async dispatchTask(req: AuthenticatedRequest, res: Response, @Param('agentId') agentId: string) {
-		const { prompt, keys } = req.body as {
+		const { prompt, keys, externalAgents } = req.body as {
 			prompt: string;
 			keys?: Record<string, string>;
+			externalAgents?: ExternalAgentConfig[];
 		};
 		const wantsStream = req.headers.accept?.includes('text/event-stream');
 
 		if (!wantsStream) {
-			return await this.executeAgentTask(agentId, prompt, { remaining: MAX_ITERATIONS }, { keys });
+			return await this.executeAgentTask(
+				agentId,
+				prompt,
+				{ remaining: MAX_ITERATIONS },
+				{
+					keys,
+					externalAgents,
+				},
+			);
 		}
 
 		res.writeHead(200, {
@@ -268,7 +284,7 @@ export class AgentsController {
 			agentId,
 			prompt,
 			{ remaining: MAX_ITERATIONS },
-			{ onStep: (event) => sseWrite(res, event), keys },
+			{ onStep: (event) => sseWrite(res, event), keys, externalAgents },
 		);
 
 		sseWrite(res, { type: 'done', status: result.status, summary: result.summary });
@@ -280,9 +296,13 @@ export class AgentsController {
 		agentId: string,
 		prompt: string,
 		budget: IterationBudget,
-		options?: { onStep?: StepCallback; keys?: Record<string, string> },
+		options?: {
+			onStep?: StepCallback;
+			keys?: Record<string, string>;
+			externalAgents?: ExternalAgentConfig[];
+		},
 	): Promise<{ status: string; summary?: string; steps: TaskStep[]; message?: string }> {
-		const { onStep, keys } = options ?? {};
+		const { onStep, keys, externalAgents } = options ?? {};
 
 		const agentUser = await this.userRepository.findOne({
 			where: { id: agentId },
@@ -321,15 +341,31 @@ export class AgentsController {
 
 		// Fetch other agents for delegation (only if budget allows)
 		const otherAgents: Array<{ firstName: string; description: string }> = [];
+		const externalAgentNames = new Set(externalAgents?.map((a) => a.name) ?? []);
+
 		if (budget.remaining > 0) {
 			const allAgents = await this.userRepository.find({ where: { type: 'agent' } });
 			for (const a of allAgents) {
-				if (a.id !== agentId && a.agentAccessLevel !== 'closed') {
+				if (
+					a.id !== agentId &&
+					a.agentAccessLevel !== 'closed' &&
+					!externalAgentNames.has(a.firstName)
+				) {
 					otherAgents.push({
 						firstName: a.firstName,
 						description: a.description ?? '',
 					});
 				}
+			}
+		}
+
+		// Merge external agents into the list (external takes priority over local duplicates)
+		if (externalAgents) {
+			for (const ext of externalAgents) {
+				otherAgents.push({
+					firstName: ext.name,
+					description: ext.description ?? '',
+				});
 			}
 		}
 
@@ -422,45 +458,21 @@ export class AgentsController {
 				parsed.message &&
 				canDelegate
 			) {
-				const targetAgent = await this.userRepository.findOne({
-					where: { firstName: parsed.toAgent, type: 'agent' },
-				});
+				// Check external agents first
+				const externalAgent = externalAgents?.find((a) => a.name === parsed.toAgent);
 
 				steps.push({ action: 'send_message', toAgent: parsed.toAgent });
-				onStep?.({ type: 'step', action: 'send_message', toAgent: parsed.toAgent });
+				onStep?.({
+					type: 'step',
+					action: 'send_message',
+					toAgent: parsed.toAgent,
+					...(externalAgent ? { external: true } : {}),
+				});
 
-				if (!targetAgent) {
-					steps[steps.length - 1].result = 'error';
-					messages.push({
-						role: 'user',
-						content: `Observation: Agent "${parsed.toAgent}" not found. Available agents: ${otherAgents.map((a) => a.firstName).join(', ')}`,
-					});
-					onStep?.({
-						type: 'observation',
-						action: 'send_message',
-						toAgent: parsed.toAgent,
-						result: 'error',
-						error: 'Agent not found',
-					});
-				} else if (targetAgent.agentAccessLevel === 'closed') {
-					steps[steps.length - 1].result = 'error';
-					messages.push({
-						role: 'user',
-						content: `Observation: Agent "${parsed.toAgent}" is not accessible.`,
-					});
-					onStep?.({
-						type: 'observation',
-						action: 'send_message',
-						toAgent: parsed.toAgent,
-						result: 'error',
-						error: 'Agent not accessible',
-					});
-				} else {
+				if (externalAgent) {
+					// HTTP delegation to remote instance
 					try {
-						const result = await this.executeAgentTask(targetAgent.id, parsed.message, budget, {
-							onStep,
-							keys,
-						});
+						const result = await callExternalAgent(externalAgent, parsed.message, keys);
 						const observation = `Agent "${parsed.toAgent}" responded: ${result.summary ?? 'No summary'}`;
 						const stepResult = result.status === 'completed' ? 'success' : 'failed';
 						steps[steps.length - 1].result = stepResult;
@@ -471,13 +483,14 @@ export class AgentsController {
 							toAgent: parsed.toAgent,
 							result: stepResult,
 							summary: result.summary,
+							external: true,
 						});
 					} catch (error) {
 						const errorMsg = error instanceof Error ? error.message : String(error);
 						steps[steps.length - 1].result = 'error';
 						messages.push({
 							role: 'user',
-							content: `Observation: Agent delegation failed: ${errorMsg}`,
+							content: `Observation: External agent delegation failed: ${errorMsg}`,
 						});
 						onStep?.({
 							type: 'observation',
@@ -485,7 +498,73 @@ export class AgentsController {
 							toAgent: parsed.toAgent,
 							result: 'error',
 							error: errorMsg,
+							external: true,
 						});
+					}
+				} else {
+					// Local delegation — existing logic
+					const targetAgent = await this.userRepository.findOne({
+						where: { firstName: parsed.toAgent, type: 'agent' },
+					});
+
+					if (!targetAgent) {
+						steps[steps.length - 1].result = 'error';
+						messages.push({
+							role: 'user',
+							content: `Observation: Agent "${parsed.toAgent}" not found. Available agents: ${otherAgents.map((a) => a.firstName).join(', ')}`,
+						});
+						onStep?.({
+							type: 'observation',
+							action: 'send_message',
+							toAgent: parsed.toAgent,
+							result: 'error',
+							error: 'Agent not found',
+						});
+					} else if (targetAgent.agentAccessLevel === 'closed') {
+						steps[steps.length - 1].result = 'error';
+						messages.push({
+							role: 'user',
+							content: `Observation: Agent "${parsed.toAgent}" is not accessible.`,
+						});
+						onStep?.({
+							type: 'observation',
+							action: 'send_message',
+							toAgent: parsed.toAgent,
+							result: 'error',
+							error: 'Agent not accessible',
+						});
+					} else {
+						try {
+							const result = await this.executeAgentTask(targetAgent.id, parsed.message, budget, {
+								onStep,
+								keys,
+							});
+							const observation = `Agent "${parsed.toAgent}" responded: ${result.summary ?? 'No summary'}`;
+							const stepResult = result.status === 'completed' ? 'success' : 'failed';
+							steps[steps.length - 1].result = stepResult;
+							messages.push({ role: 'user', content: `Observation: ${observation}` });
+							onStep?.({
+								type: 'observation',
+								action: 'send_message',
+								toAgent: parsed.toAgent,
+								result: stepResult,
+								summary: result.summary,
+							});
+						} catch (error) {
+							const errorMsg = error instanceof Error ? error.message : String(error);
+							steps[steps.length - 1].result = 'error';
+							messages.push({
+								role: 'user',
+								content: `Observation: Agent delegation failed: ${errorMsg}`,
+							});
+							onStep?.({
+								type: 'observation',
+								action: 'send_message',
+								toAgent: parsed.toAgent,
+								result: 'error',
+								error: errorMsg,
+							});
+						}
 					}
 				}
 			} else {
@@ -703,6 +782,33 @@ When the task is complete (after seeing all results):
 {"action": "complete", "summary": "<what was accomplished>"}
 
 If asked to run something multiple times, execute it once, wait for the result, then execute again.`;
+}
+
+export async function callExternalAgent(
+	config: ExternalAgentConfig,
+	message: string,
+	keys?: Record<string, string>,
+): Promise<{ status: string; summary?: string; steps: TaskStep[] }> {
+	const response = await fetch(config.url, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'x-n8n-api-key': config.apiKey,
+		},
+		body: JSON.stringify({ prompt: message, keys }),
+	});
+
+	if (!response.ok) {
+		throw new Error(`External agent returned ${response.status}: ${await response.text()}`);
+	}
+
+	const data = (await response.json()) as {
+		data?: { status: string; summary?: string; steps: TaskStep[] };
+		status?: string;
+		summary?: string;
+		steps?: TaskStep[];
+	};
+	return (data.data ?? data) as { status: string; summary?: string; steps: TaskStep[] };
 }
 
 export async function callLlm(messages: LlmMessage[], apiKey?: string): Promise<string> {

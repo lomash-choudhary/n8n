@@ -8,7 +8,12 @@ import type {
 import { mock } from 'jest-mock-extended';
 import type { Request, Response } from 'express';
 
-import { AgentsController, buildSystemPrompt } from '../agents.controller';
+import {
+	AgentsController,
+	buildSystemPrompt,
+	callExternalAgent,
+	type ExternalAgentConfig,
+} from '../agents.controller';
 
 import type { ActiveExecutions } from '@/active-executions';
 import type { CredentialsService } from '@/credentials/credentials.service';
@@ -219,6 +224,25 @@ describe('AgentsController', () => {
 			expect(prompt).toContain('"execute_workflow" or "complete"');
 			expect(prompt).not.toContain('"send_message"');
 		});
+
+		it('should include external agents in prompt alongside local agents', () => {
+			const localAgents = [{ firstName: 'LocalBot', description: 'Local helper' }];
+			const externalAgents = [{ firstName: 'RemoteBot', description: 'Remote helper' }];
+			const merged = [...localAgents, ...externalAgents];
+			const prompt = buildSystemPrompt('TestAgent', [], merged, true);
+
+			expect(prompt).toContain('LocalBot: Local helper');
+			expect(prompt).toContain('RemoteBot: Remote helper');
+			expect(prompt).toContain('send_message');
+		});
+
+		it('should show external-only agents when no local agents exist', () => {
+			const externalOnly = [{ firstName: 'ExtBot', description: 'External only' }];
+			const prompt = buildSystemPrompt('TestAgent', [], externalOnly, true);
+
+			expect(prompt).toContain('ExtBot: External only');
+			expect(prompt).toContain('send_message');
+		});
 	});
 
 	describe('createAgent', () => {
@@ -290,5 +314,78 @@ describe('AgentsController', () => {
 			expect(result.description).toBe('A helpful agent');
 			expect(result.agentAccessLevel).toBe('open');
 		});
+	});
+});
+
+describe('callExternalAgent', () => {
+	const originalFetch = global.fetch;
+
+	afterEach(() => {
+		global.fetch = originalFetch;
+	});
+
+	it('should POST to external agent URL with correct headers and body', async () => {
+		const config: ExternalAgentConfig = {
+			name: 'RemoteBot',
+			url: 'https://remote.example.com/rest/agents/abc/task',
+			apiKey: 'remote-api-key',
+		};
+
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				data: { status: 'completed', summary: 'Done remotely', steps: [] },
+			}),
+		});
+
+		const result = await callExternalAgent(config, 'Do something', { llm: 'key123' });
+
+		expect(global.fetch).toHaveBeenCalledWith('https://remote.example.com/rest/agents/abc/task', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'x-n8n-api-key': 'remote-api-key',
+			},
+			body: JSON.stringify({ prompt: 'Do something', keys: { llm: 'key123' } }),
+		});
+
+		expect(result.status).toBe('completed');
+		expect(result.summary).toBe('Done remotely');
+	});
+
+	it('should unwrap response without data envelope', async () => {
+		const config: ExternalAgentConfig = {
+			name: 'RemoteBot',
+			url: 'https://remote.example.com/rest/agents/abc/task',
+			apiKey: 'key',
+		};
+
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ status: 'completed', summary: 'Direct', steps: [] }),
+		});
+
+		const result = await callExternalAgent(config, 'Hello');
+
+		expect(result.status).toBe('completed');
+		expect(result.summary).toBe('Direct');
+	});
+
+	it('should throw on non-OK response', async () => {
+		const config: ExternalAgentConfig = {
+			name: 'RemoteBot',
+			url: 'https://remote.example.com/rest/agents/abc/task',
+			apiKey: 'key',
+		};
+
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			text: async () => 'Internal Server Error',
+		});
+
+		await expect(callExternalAgent(config, 'Hello')).rejects.toThrow(
+			'External agent returned 500: Internal Server Error',
+		);
 	});
 });

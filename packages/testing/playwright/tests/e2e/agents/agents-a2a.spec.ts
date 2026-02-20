@@ -5,6 +5,16 @@ import { test, expect, agentTestConfig } from './fixtures';
 
 test.use(agentTestConfig);
 
+/**
+ * Server-internal URL for external agent delegation.
+ * callExternalAgent runs inside the container where n8n listens on :5678.
+ * The host-mapped port (backendUrl) is NOT reachable from inside the container.
+ */
+function getServerInternalUrl(backendUrl: string): string {
+	if (backendUrl.includes(':5678')) return backendUrl;
+	return 'http://localhost:5678';
+}
+
 /** Unwrap n8n's `{ data: T }` response envelope */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- generic provides call-site type narrowing
 async function unwrap<T>(response: APIResponse): Promise<T> {
@@ -681,5 +691,231 @@ test.describe('BYOK/BYOC (Bring Your Own Keys)', () => {
 		const executionStep = task.steps.find((s) => s.action === 'execute_workflow');
 		expect(executionStep).toBeTruthy();
 		expect(executionStep!.result).toBe('success');
+	});
+});
+
+test.describe('Agent Cross-Instance Delegation', () => {
+	test('should delegate to external agent via HTTP', async ({
+		agent: agentA,
+		agentProject,
+		agentLlmApiKey,
+		api,
+		backendUrl,
+		ownerApiKey,
+		externalRequest,
+	}) => {
+		test.skip(!agentLlmApiKey, 'N8N_AGENT_LLM_API_KEY not set — skipping LLM tests');
+		test.setTimeout(180_000);
+
+		// Create Agent B with a workflow
+		const agentB = await api.agents.createAgent({
+			firstName: `DocsBot-${nanoid(8)}`,
+			description: 'Knowledge base manager',
+			agentAccessLevel: 'open',
+		});
+		await api.projects.addUserToProject(agentProject.id, agentA.id, 'project:editor');
+		await api.projects.addUserToProject(agentProject.id, agentB.id, 'project:editor');
+
+		// Create a workflow for Agent B
+		const workflowName = `DocsBot Workflow ${nanoid(8)}`;
+		const workflow = await api.workflows.createWorkflow({
+			name: workflowName,
+			nodes: [
+				{
+					id: nanoid(),
+					name: 'When clicking "Test workflow"',
+					type: 'n8n-nodes-base.manualTrigger',
+					typeVersion: 1,
+					position: [250, 300],
+					parameters: {},
+				},
+				{
+					id: nanoid(),
+					name: 'Set',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					position: [450, 300],
+					parameters: {
+						assignments: {
+							assignments: [
+								{
+									id: nanoid(),
+									name: 'result',
+									value: 'External delegation result',
+									type: 'string',
+								},
+							],
+						},
+					},
+				},
+			],
+			connections: {
+				'When clicking "Test workflow"': {
+					main: [[{ node: 'Set', type: 'main', index: 0 }]],
+				},
+			},
+		});
+		await api.workflows.transfer(workflow.id, agentProject.id);
+
+		// Dispatch to Agent A with Agent B as an external agent (same instance, different HTTP path)
+		// externalAgents URL uses internal URL (reachable from inside the container)
+		const internalUrl = getServerInternalUrl(backendUrl);
+		const response = await externalRequest.post(`/rest/agents/${agentA.id}/task`, {
+			data: {
+				prompt: `Delegate to ${agentB.firstName} to run their workflow and report the result.`,
+				externalAgents: [
+					{
+						name: agentB.firstName,
+						description: 'Knowledge base manager',
+						url: `${internalUrl}/rest/agents/${agentB.id}/task`,
+						apiKey: ownerApiKey.rawApiKey,
+					},
+				],
+			},
+		});
+
+		expect(response.ok()).toBe(true);
+
+		const task = await unwrap<{
+			status: string;
+			summary: string;
+			steps: Array<{ action: string; workflowName?: string; toAgent?: string; result?: string }>;
+		}>(response);
+
+		// eslint-disable-next-line no-console
+		console.log('\n--- Cross-Instance Delegation Result ---');
+		// eslint-disable-next-line no-console
+		console.log(`  Status: ${task.status}`);
+		// eslint-disable-next-line no-console
+		console.log(`  Summary: ${task.summary}`);
+		// eslint-disable-next-line no-console
+		console.log(`  Steps: ${JSON.stringify(task.steps)}`);
+		// eslint-disable-next-line no-console
+		console.log('--- End ---\n');
+
+		expect(task.status).toBe('completed');
+		const delegationStep = task.steps.find(
+			(s) => s.action === 'send_message' && s.toAgent === agentB.firstName,
+		);
+		expect(delegationStep).toBeTruthy();
+		expect(delegationStep!.result).toBe('success');
+	});
+
+	test('should stream SSE events with external: true for cross-instance delegation', async ({
+		agent: agentA,
+		agentProject,
+		agentLlmApiKey,
+		api,
+		backendUrl,
+		ownerApiKey,
+	}) => {
+		test.skip(!agentLlmApiKey, 'N8N_AGENT_LLM_API_KEY not set — skipping LLM tests');
+		test.setTimeout(180_000);
+
+		const agentB = await api.agents.createAgent({
+			firstName: `StreamBot-${nanoid(8)}`,
+			description: 'Streaming delegation target',
+			agentAccessLevel: 'open',
+		});
+		await api.projects.addUserToProject(agentProject.id, agentA.id, 'project:editor');
+		await api.projects.addUserToProject(agentProject.id, agentB.id, 'project:editor');
+
+		const workflowName = `StreamBot Workflow ${nanoid(8)}`;
+		const workflow = await api.workflows.createWorkflow({
+			name: workflowName,
+			nodes: [
+				{
+					id: nanoid(),
+					name: 'When clicking "Test workflow"',
+					type: 'n8n-nodes-base.manualTrigger',
+					typeVersion: 1,
+					position: [250, 300],
+					parameters: {},
+				},
+				{
+					id: nanoid(),
+					name: 'Set',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					position: [450, 300],
+					parameters: {
+						assignments: {
+							assignments: [
+								{
+									id: nanoid(),
+									name: 'result',
+									value: 'SSE external result',
+									type: 'string',
+								},
+							],
+						},
+					},
+				},
+			],
+			connections: {
+				'When clicking "Test workflow"': {
+					main: [[{ node: 'Set', type: 'main', index: 0 }]],
+				},
+			},
+		});
+		await api.workflows.transfer(workflow.id, agentProject.id);
+
+		// SSE request with external agents
+		// externalAgents URL uses internal URL (reachable from inside the container)
+		const sseInternalUrl = getServerInternalUrl(backendUrl);
+		const response = await fetch(`${backendUrl}/rest/agents/${agentA.id}/task`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Accept: 'text/event-stream',
+				'x-n8n-api-key': ownerApiKey.rawApiKey,
+			},
+			body: JSON.stringify({
+				prompt: `Delegate to ${agentB.firstName} to run their workflow and report the result.`,
+				externalAgents: [
+					{
+						name: agentB.firstName,
+						description: 'Streaming delegation target',
+						url: `${sseInternalUrl}/rest/agents/${agentB.id}/task`,
+						apiKey: ownerApiKey.rawApiKey,
+					},
+				],
+			}),
+		});
+
+		expect(response.ok).toBe(true);
+		expect(response.headers.get('content-type')).toContain('text/event-stream');
+
+		const body = await response.text();
+		const events = parseSseEvents(body);
+
+		// eslint-disable-next-line no-console
+		console.log('\n--- SSE External Delegation Events ---');
+		for (const event of events) {
+			// eslint-disable-next-line no-console
+			console.log(`  ${String(event.type)}: ${JSON.stringify(event)}`);
+		}
+		// eslint-disable-next-line no-console
+		console.log('--- End Stream ---\n');
+
+		// Must have at least step + observation + done
+		expect(events.length).toBeGreaterThanOrEqual(3);
+
+		// Should contain a send_message step with external: true
+		const delegationStep = events.find(
+			(e) => e.type === 'step' && e.action === 'send_message' && e.external === true,
+		);
+		expect(delegationStep).toBeTruthy();
+
+		// Should have an observation with external: true
+		const observation = events.find(
+			(e) => e.type === 'observation' && e.action === 'send_message' && e.external === true,
+		);
+		expect(observation).toBeTruthy();
+
+		// Done event
+		const doneEvent = events[events.length - 1];
+		expect(doneEvent.type).toBe('done');
+		expect(doneEvent.status).toBe('completed');
 	});
 });

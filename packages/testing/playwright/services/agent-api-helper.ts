@@ -34,6 +34,13 @@ export interface AgentCard {
 	security: Array<Record<string, unknown[]>>;
 }
 
+export interface ExternalAgentConfig {
+	name: string;
+	description?: string;
+	url: string;
+	apiKey: string;
+}
+
 export interface AgentTaskResult {
 	status: string;
 	summary?: string;
@@ -127,6 +134,26 @@ export class AgentApiHelper {
 
 		if (!response.ok()) {
 			throw new TestError(`Failed to dispatch agent task: ${await response.text()}`);
+		}
+
+		const result = await response.json();
+		return result.data ?? result;
+	}
+
+	async dispatchTaskWithExternalAgents(
+		agentId: string,
+		prompt: string,
+		externalAgents: ExternalAgentConfig[],
+		keys?: Record<string, string>,
+	): Promise<AgentTaskResult> {
+		const response = await this.api.request.post(`/rest/agents/${agentId}/task`, {
+			data: { prompt, externalAgents, ...(keys ? { keys } : {}) },
+		});
+
+		if (!response.ok()) {
+			throw new TestError(
+				`Failed to dispatch agent task with external agents: ${await response.text()}`,
+			);
 		}
 
 		const result = await response.json();
