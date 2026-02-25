@@ -38,7 +38,6 @@ import { useNodeTypesStore } from '@/app/stores/nodeTypes.store';
 import isEqual from 'lodash/isEqual';
 import pick from 'lodash/pick';
 import { createEventBus } from '@n8n/utils/event-bus';
-import type { WorkflowMetadata } from '@n8n/rest-api-client';
 import {
 	useWorkflowDocumentStore,
 	createWorkflowDocumentId,
@@ -190,17 +189,6 @@ export function useWorkflowState() {
 
 	function setWorkflowScopes(scopes: IWorkflowDb['scopes']): void {
 		ws.workflow.scopes = scopes;
-	}
-
-	function setWorkflowMetadata(metadata: WorkflowMetadata | undefined): void {
-		ws.workflow.meta = metadata;
-	}
-
-	function addToWorkflowMetadata(data: Partial<WorkflowMetadata>): void {
-		ws.workflow.meta = {
-			...ws.workflow.meta,
-			...data,
-		};
 	}
 
 	////
@@ -457,8 +445,6 @@ export function useWorkflowState() {
 		setActiveExecutionId,
 		getNewWorkflowDataAndMakeShareable,
 		setWorkflowScopes,
-		setWorkflowMetadata,
-		addToWorkflowMetadata,
 
 		// Execution
 		markExecutionAsStopped,
