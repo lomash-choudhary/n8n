@@ -8,33 +8,32 @@ on:
         required: true
         type: string
       user_token:
-        description: 'Your GitHub PAT (required for PR authorship - you cannot approve PRs you author)'
+        description: 'Your GitHub PAT (used for git author identity)'
         required: false
         type: string
       resumeUrl:
         description: 'Optional callback URL to call with the result when the workflow completes'
         required: false
         type: string
-      createPr:
-        description: 'Create a pull request with the changes'
-        required: false
-        type: boolean
-        default: false
       model:
         description: 'Claude model to use (e.g., claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5)'
         required: false
         type: string
         default: 'claude-sonnet-4-5-20250929'
+      continue_last_session:
+        description: 'Continue from the last Claude session instead of starting a new one'
+        required: false
+        type: boolean
+        default: false
       use_raw_prompt:
         description: 'Pass the task input directly as the prompt without wrapping it with guidelines and instructions'
         required: false
         type: boolean
         default: false
       ref:
-        description: 'Git ref (branch/tag/SHA) to check out and work on'
-        required: false
+        description: 'Git ref (branch) to check out and commit to'
+        required: true
         type: string
-        default: 'master'
 
 jobs:
   run-claude-task:
@@ -49,6 +48,10 @@ jobs:
       - name: Mask user token
         run: echo "::add-mask::${{ inputs.user_token }}"
 
+      - name: Mask resume URL
+        if: inputs.resumeUrl != ''
+        run: echo "::add-mask::${{ inputs.resumeUrl }}"
+
       - name: Checkout repository
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -59,12 +62,6 @@ jobs:
         uses: ./.github/actions/setup-nodejs
         with:
           build-command: ''
-
-      - name: Create working branch
-        run: |
-          BRANCH_NAME="claude/task-${{ github.run_id }}-${{ github.run_attempt }}"
-          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
-          git checkout -b "$BRANCH_NAME"
 
       - name: Configure git author
         env:
@@ -85,6 +82,50 @@ jobs:
             git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
             echo "Git author configured as: ${{ github.actor }}"
           fi
+
+      - name: Restore Claude sessions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENCRYPTION_KEY: ${{ secrets.CLAUDE_SESSIONS_ENCRYPTION_KEY }}
+        run: |
+          ARTIFACT_NAME="claude-sessions-$(echo '${{ inputs.ref }}' | sed 's/[^a-zA-Z0-9._-]/-/g')"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+
+          if [ -z "$ENCRYPTION_KEY" ]; then
+            echo "::warning::CLAUDE_SESSIONS_ENCRYPTION_KEY secret not set. Skipping session restore."
+            exit 0
+          fi
+
+          # Find the most recent non-expired artifact from a previous run
+          ARTIFACT_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=$ARTIFACT_NAME&per_page=1" \
+            --jq '.artifacts[] | select(.expired == false) | .id' 2>/dev/null | head -1)
+
+          if [ -z "$ARTIFACT_ID" ]; then
+            echo "No previous Claude sessions found for artifact: $ARTIFACT_NAME"
+            exit 0
+          fi
+
+          echo "Found previous Claude sessions (artifact $ARTIFACT_ID), downloading..."
+          if ! gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > /tmp/claude-sessions-artifact.zip 2>/dev/null; then
+            echo "::warning::Failed to download artifact $ARTIFACT_ID. Skipping session restore."
+            rm -f /tmp/claude-sessions-artifact.zip
+            exit 0
+          fi
+
+          unzip -o /tmp/claude-sessions-artifact.zip -d /tmp/claude-sessions-encrypted
+          rm /tmp/claude-sessions-artifact.zip
+
+          if [ -f /tmp/claude-sessions-encrypted/claude-sessions.tar.gz.enc ]; then
+            mkdir -p ~/.claude/projects
+            openssl enc -aes-256-cbc -d -pbkdf2 -iter 100000 \
+              -in /tmp/claude-sessions-encrypted/claude-sessions.tar.gz.enc \
+              -pass env:ENCRYPTION_KEY \
+            | tar xz -C ~/.claude/projects
+            echo "Restored and decrypted Claude sessions from previous run."
+          else
+            echo "::warning::Artifact found but missing encrypted payload. Skipping."
+          fi
+          rm -rf /tmp/claude-sessions-encrypted
 
       - name: Prepare Claude prompt
         env:
@@ -112,7 +153,7 @@ jobs:
               echo "1. Read relevant templates from .github/claude-templates/ first"
               echo "2. Complete the task described above"
               echo "3. Follow the guidelines from the templates"
-              echo "4. Make commits as you work - the last commit message will be used as the PR title"
+              echo "4. Make commits as you work"
               echo "5. IMPORTANT: End every commit message with: Co-authored-by: Claude <noreply@anthropic.com>"
               echo "6. Ensure code passes linting and type checks before finishing"
               echo ""
@@ -146,19 +187,22 @@ jobs:
                 "command": "npx",
                 "args": ["-y", "@notionhq/notion-mcp-server"],
                 "env": {
-                  "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer MCP_NOTION_TOKEN_PLACEHOLDER\",\"Notion-Version\":\"2025-02-19\"}"
+                  "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer MCP_NOTION_TOKEN_PLACEHOLDER\",\"Notion-Version\":\"2025-09-03\"}"
                 }
               }
             }
           }
           MCPEOF
           sed -i "s|MCP_LINEAR_API_KEY_PLACEHOLDER|${{ secrets.MCP_LINEAR_API_KEY }}|g" /tmp/mcp-config.json
-          sed -i "s|MCP_NOTION_TOKEN_PLACEHOLDER|${{ secrets.MCP_NOTION_TOKEN }}|g" /tmp/mcp-config.json
+          sed -i "s|MCP_NOTION_TOKEN_PLACEHOLDER|${{ secrets.MCP_NOTION_TOKEN_WITH_COMMENTS }}|g" /tmp/mcp-config.json
 
       - name: Run Claude
         id: claude
-        uses: anthropics/claude-code-action@1b8ee3b94104046d71fde52ec3557651ad8c0d71 # v1
+        uses: anthropics/claude-code-action@ade221fd1c400376a4799977d683a4eda09f9d7c # v1 (latest)
+        env:
+          MCP_NOTION_TOKEN_WITH_COMMENTS: ${{ secrets.MCP_NOTION_TOKEN_WITH_COMMENTS }}
         with:
+          display_report: "false"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
           prompt: ${{ env.CLAUDE_PROMPT }}
@@ -183,78 +227,85 @@ jobs:
               }
             }
           claude_args: |
-            --model ${{ inputs.model }} --mcp-config /tmp/mcp-config.json
+            ${{ inputs.continue_last_session == true && '--continue' || '' }} --model ${{ inputs.model }} --mcp-config /tmp/mcp-config.json
 
-      - name: Extract PR title
+      - name: Push changes
+        if: always()
         run: |
-          # Use the last commit message as PR title
-          PR_TITLE=$(git log -1 --format='%s' 2>/dev/null | head -1)
-          # Strip Co-authored-by suffix if present
-          PR_TITLE="${PR_TITLE%%[Cc]o-[Aa]uthored-[Bb]y:*}"
-          PR_TITLE="${PR_TITLE%% }"
-          if [ -z "$PR_TITLE" ]; then
-            PR_TITLE="chore: Claude automated task (run ${{ github.run_id }})"
-          fi
-          echo "PR_TITLE=$PR_TITLE" >> "$GITHUB_ENV"
-          echo "Extracted PR title: $PR_TITLE"
-
-      - name: Push branch and create PR
-        env:
-          INPUT_TASK: ${{ inputs.task }}
-          TRIGGERED_BY: ${{ github.actor }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if ! git diff --quiet "${{ inputs.ref }}"; then
-            # Push using github.token (has write access via workflow permissions)
+          if ! git diff --quiet HEAD "origin/${{ inputs.ref }}" 2>/dev/null; then
             git remote set-url origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
-            git push -u origin "$BRANCH_NAME"
-
-            if [ "${{ inputs.createPr }}" = "true" ]; then
-              # Switch to PAT for PR creation (so PR is authored by the user)
-              export GH_TOKEN="${{ inputs.user_token }}"
-              if [ -z "${{ inputs.user_token }}" ]; then
-                echo "::error::createPr is enabled but user_token was not provided. A personal access token is required to create PRs under your identity."
-                exit 1
-              fi
-
-              {
-                echo "## Summary"
-                echo "Automated task completed by Claude."
-                echo ""
-                echo "### Task Description"
-                echo "$INPUT_TASK"
-                echo ""
-                echo "### Generated by"
-                echo "[Workflow Run #${{ github.run_id }}]($RUN_URL)"
-                echo ""
-                echo "---"
-                echo "*Triggered by @$TRIGGERED_BY via the Claude Task Runner workflow.*"
-              } > /tmp/pr-body.md
-
-              EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "${{ inputs.ref }}" --json number --jq '.[0].number')
-              if [ -n "$EXISTING_PR" ]; then
-                gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file /tmp/pr-body.md
-                echo "::notice::Updated existing PR #$EXISTING_PR"
-              else
-                gh pr create --title "$PR_TITLE" --body-file /tmp/pr-body.md --base "${{ inputs.ref }}"
-              fi
-            else
-              echo "::notice::PR creation is disabled. Changes pushed to branch but no PR created."
-            fi
+            git push origin HEAD:"${{ inputs.ref }}"
           else
-            echo "::notice::No changes made by Claude. Skipping PR creation."
+            echo "::notice::No changes made by Claude. Skipping push."
           fi
 
-      - name: Summary
+      - name: Send report to webhook
+        if: always()
         env:
           INPUT_TASK: ${{ inputs.task }}
+          WEBHOOK_URL: ${{ secrets.CLAUDE_REPORT_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.CLAUDE_REPORT_WEBHOOK_TOKEN }}
         run: |
-          {
-            echo "## Claude Task Runner Summary"
-            echo ""
-            echo "**Task:** $INPUT_TASK"
-            echo "**Branch:** $BRANCH_NAME"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_TOKEN" ]; then
+            echo "::warning::CLAUDE_REPORT_WEBHOOK_URL or CLAUDE_REPORT_WEBHOOK_TOKEN secret not set. Skipping report."
+            exit 0
+          fi
+
+          # Check for skill-produced summary
+          REPORT=""
+          if [ -f /tmp/skill-summary.md ]; then
+            REPORT=$(cat /tmp/skill-summary.md)
+            echo "Found skill summary (${#REPORT} chars)."
+          fi
+
+          if [ -n "$REPORT" ]; then
+            echo "Sending report to webhook..."
+            jq -n \
+              --arg task "$INPUT_TASK" \
+              --arg branch "${{ inputs.ref }}" \
+              --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --arg triggered_by "${{ github.actor }}" \
+              --arg report "$REPORT" \
+              '{task: $task, branch: $branch, run_url: $run_url, triggered_by: $triggered_by, report: $report}' \
+            | curl -s --max-time 30 -w "\nHTTP status: %{http_code}\n" -X POST "$WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $WEBHOOK_TOKEN" \
+              --data-binary @-
+          else
+            echo "::notice::No skill summary found. Skipping webhook report."
+          fi
+
+      - name: Upload Claude sessions
+        if: always()
+        id: encrypt-sessions
+        env:
+          ENCRYPTION_KEY: ${{ secrets.CLAUDE_SESSIONS_ENCRYPTION_KEY }}
+        run: |
+          if [ -z "$ENCRYPTION_KEY" ]; then
+            echo "::warning::CLAUDE_SESSIONS_ENCRYPTION_KEY secret not set. Skipping session upload."
+            exit 0
+          fi
+
+          if [ -d ~/.claude/projects ] && [ "$(ls -A ~/.claude/projects)" ]; then
+            mkdir -p /tmp/claude-sessions-upload
+            tar cz -C ~/.claude/projects . \
+            | openssl enc -aes-256-cbc -e -pbkdf2 -iter 100000 \
+                -pass env:ENCRYPTION_KEY \
+                -out /tmp/claude-sessions-upload/claude-sessions.tar.gz.enc
+            echo "Encrypted Claude sessions for upload."
+            echo "has_sessions=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No Claude session data found. Skipping upload."
+          fi
+
+      - name: Upload Claude sessions artifact
+        if: always() && steps.encrypt-sessions.outputs.has_sessions == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /tmp/claude-sessions-upload/
+          retention-days: 30
+          overwrite: true
 
       - name: Call resume url
         if: inputs.resumeUrl != ''
@@ -263,13 +314,13 @@ jobs:
         run: |
           # Extract only the result message (last element) from Claude's output
           if [ -f "$EXECUTION_FILE" ]; then
-            jq --arg branch "$BRANCH_NAME" \
+            jq --arg branch "${{ inputs.ref }}" \
               '{success: true, branch: $branch, result: .[-1]}' "$EXECUTION_FILE" \
-            | curl -X POST "${{ inputs.resumeUrl }}" \
+            | curl --max-time 30 -X POST "${{ inputs.resumeUrl }}" \
               -H "Content-Type: application/json" \
               --data-binary @-
           else
-            curl -X POST "${{ inputs.resumeUrl }}" \
+            curl --max-time 30 -X POST "${{ inputs.resumeUrl }}" \
               -H "Content-Type: application/json" \
-              -d "{\"success\": true, \"branch\": \"$BRANCH_NAME\", \"result\": null}"
+              -d "{\"success\": true, \"branch\": \"${{ inputs.ref }}\", \"result\": null}"
           fi
