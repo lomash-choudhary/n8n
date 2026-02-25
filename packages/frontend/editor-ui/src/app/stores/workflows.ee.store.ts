@@ -3,9 +3,13 @@ import { EnterpriseEditionFeature } from '@/app/constants';
 import { STORES } from '@n8n/stores';
 import { useRootStore } from '@n8n/stores/useRootStore';
 import { useSettingsStore } from '@/app/stores/settings.store';
-import { defineStore } from 'pinia';
-import { useWorkflowsStore } from '@/app/stores/workflows.store';
+import { defineStore, getActivePinia, type StoreGeneric } from 'pinia';
 import { useWorkflowsListStore } from '@/app/stores/workflowsList.store';
+import {
+	useWorkflowDocumentStore,
+	createWorkflowDocumentId,
+	getWorkflowDocumentStoreId,
+} from '@/app/stores/workflowDocument.store';
 import { i18n } from '@n8n/i18n';
 import type { ProjectSharingData } from '@/features/collaboration/projects/projects.types';
 import { splitName } from '@/features/collaboration/projects/projects.utils';
@@ -36,14 +40,21 @@ export const useWorkflowsEEStore = defineStore(STORES.WORKFLOWS_EE, () => {
 		workflowId: string;
 		sharedWithProjects: ProjectSharingData[];
 	}) => {
-		const workflowsStore = useWorkflowsStore();
 		workflowsListStore.updateWorkflowInCache(payload.workflowId, {
 			sharedWithProjects: payload.sharedWithProjects,
 		});
-		workflowsStore.workflow = {
-			...workflowsStore.workflow,
-			sharedWithProjects: payload.sharedWithProjects,
+
+		// Only update the document store if this workflow is currently open in the editor.
+		// Calling useWorkflowDocumentStore for a workflow that was never loaded would create
+		// an orphaned Pinia store that is never disposed.
+		const documentId = createWorkflowDocumentId(payload.workflowId);
+		const pinia = getActivePinia() as ReturnType<typeof getActivePinia> & {
+			_s: Map<string, StoreGeneric>;
 		};
+		if (pinia?._s.has(getWorkflowDocumentStoreId(documentId))) {
+			const workflowDocumentStore = useWorkflowDocumentStore(documentId);
+			workflowDocumentStore.setSharedWithProjects(payload.sharedWithProjects);
+		}
 	};
 
 	const saveWorkflowSharedWith = async (payload: {

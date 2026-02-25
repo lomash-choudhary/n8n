@@ -24,6 +24,10 @@ import { usePageRedirectionHelper } from '@/app/composables/usePageRedirectionHe
 import { useI18n } from '@n8n/i18n';
 import { telemetry } from '@/app/plugins/telemetry';
 import { useWorkflowSaving } from '@/app/composables/useWorkflowSaving';
+import {
+	useWorkflowDocumentStore,
+	createWorkflowDocumentId,
+} from '@/app/stores/workflowDocument.store';
 import { I18nT } from 'vue-i18n';
 
 import { N8nButton, N8nInfoTip, N8nText } from '@n8n/design-system';
@@ -59,9 +63,14 @@ const workflow = ref(
 const loading = ref(true);
 const isDirty = ref(false);
 const modalBus = createEventBus();
-const sharedWithProjects = ref([
-	...(workflow.value.sharedWithProjects ?? []),
-] as ProjectSharingData[]);
+function getInitialSharedWithProjects(): ProjectSharingData[] {
+	if (data.id && data.id === workflowsStore.workflowId) {
+		const docStore = useWorkflowDocumentStore(createWorkflowDocumentId(data.id));
+		return [...docStore.sharedWithProjects];
+	}
+	return [...(workflow.value.sharedWithProjects ?? [])];
+}
+const sharedWithProjects = ref(getInitialSharedWithProjects());
 const teamProject = ref(null as Project | null);
 
 const isSharingEnabled = computed(

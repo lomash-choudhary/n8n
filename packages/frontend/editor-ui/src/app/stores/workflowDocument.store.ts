@@ -4,6 +4,7 @@ import { inject } from 'vue';
 import { WorkflowDocumentStoreKey } from '@/app/constants/injectionKeys';
 import { useWorkflowDocumentActive } from './workflowDocument/useWorkflowDocumentActive';
 import { useWorkflowDocumentPinData } from './workflowDocument/useWorkflowDocumentPinData';
+import { useWorkflowDocumentSharedWithProjects } from './workflowDocument/useWorkflowDocumentSharedWithProjects';
 import { useWorkflowDocumentTags } from './workflowDocument/useWorkflowDocumentTags';
 
 export {
@@ -49,6 +50,7 @@ export function useWorkflowDocumentStore(id: WorkflowDocumentId) {
 		const workflowDocumentActive = useWorkflowDocumentActive();
 		const workflowDocumentTags = useWorkflowDocumentTags();
 		const workflowDocumentPinData = useWorkflowDocumentPinData();
+		const workflowDocumentSharedWithProjects = useWorkflowDocumentSharedWithProjects();
 
 		return {
 			workflowId,
@@ -56,6 +58,7 @@ export function useWorkflowDocumentStore(id: WorkflowDocumentId) {
 			...workflowDocumentActive,
 			...workflowDocumentTags,
 			...workflowDocumentPinData,
+			...workflowDocumentSharedWithProjects,
 		};
 	})();
 }
