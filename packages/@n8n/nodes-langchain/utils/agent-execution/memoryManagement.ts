@@ -79,6 +79,17 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 
 	for (let i = 0; i < steps.length; i++) {
 		const step = steps[i];
+
+		// Announcement steps → store as AIMessage in memory
+		// (These only exist when saveAnnouncements is enabled)
+		if (step.action.type === 'announcement') {
+			const logContent = typeof step.action.log === 'string' ? step.action.log : '';
+			if (logContent) {
+				messages.push(new AIMessage({ content: logContent }));
+			}
+			continue;
+		}
+
 		const messageLog = step.action.messageLog ?? [];
 
 		if (messageLog.length > 0) {
@@ -91,18 +102,18 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 			const messageWithToolCalls = messageLog.find((m) => m.tool_calls && m.tool_calls.length > 0);
 			const toolCallId =
 				messageWithToolCalls?.tool_calls?.[0]?.id ??
-				extractToolCallId(step.action.toolCallId, step.action.tool);
+				extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation,
+					content: step.observation ?? '',
 					tool_call_id: toolCallId,
-					name: step.action.tool,
+					name: step.action.tool ?? '',
 				}),
 			);
 		} else {
 			// Create synthetic AIMessage + ToolMessage for steps without messageLog
-			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool);
+			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
 
 			messages.push(
 				new AIMessage({
@@ -110,8 +121,8 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 					tool_calls: [
 						{
 							id: toolCallId,
-							name: step.action.tool,
-							args: step.action.toolInput,
+							name: step.action.tool ?? '',
+							args: step.action.toolInput ?? {},
 							type: 'tool_call',
 						},
 					],
@@ -120,9 +131,9 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation,
+					content: step.observation ?? '',
 					tool_call_id: toolCallId,
-					name: step.action.tool,
+					name: step.action.tool ?? '',
 				}),
 			);
 		}
@@ -150,6 +161,7 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
  */
 export function buildToolContext(steps: ToolCallData[]): string {
 	return steps
+		.filter((step) => step.action.type !== 'announcement')
 		.map(
 			(step) =>
 				`Tool: ${step.action.tool}, Input: ${JSON.stringify(step.action.toolInput)}, Result: ${step.observation}`,

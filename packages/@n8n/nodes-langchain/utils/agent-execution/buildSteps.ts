@@ -372,26 +372,29 @@ export function buildSteps(
 		// Exclude metadata fields (id, log, type) from the tool input forwarded to the result
 		const { id, log, type, ...toolInputForResult } = toolInput;
 
-		// Extract clean announcement text from metadata (falling back to empty string so it surfaces in intermediate steps)
+		// Extract announcement text from metadata
 		const announcement = tool.action.metadata?.announcement || '';
-		// Extract the user-facing message: text after the last \n\n\n delimiter
-		const message = announcement
-			? announcement.includes('\n\n\n')
-				? announcement.split('\n\n\n').pop()!.trim()
-				: announcement
-			: '';
 
-		// Build announcement as a separate AIMessage (only for the first tool in the batch
+		// Push a separate announcement step (only for the first tool in the batch
 		// to avoid duplicating the same streamed text across parallel calls)
-		const announcementMessages: AIMessage[] = [];
 		if (i === 0 && announcement) {
 			const toolOptions = tool.action.metadata?.options as Record<string, unknown> | undefined;
 			const isStreaming = toolOptions?.enableStreaming === true;
 			const saveAnnouncements = isStreaming ? toolOptions?.saveAnnouncements !== false : true;
 			if (saveAnnouncements) {
-				announcementMessages.push(new AIMessage({ content: message || announcement }));
+				steps.push({
+					action: {
+						type: 'announcement',
+						log: announcement,
+					},
+				});
 			}
 		}
+
+		// NOTE: We do NOT add a separate announcement AIMessage to the messageLog here.
+		// The original LLM AIMessage (sharedAIMessage or individual) already contains
+		// the announcement text as its `content` field. Adding another would duplicate it
+		// in memory/scratchpad.
 
 		// Parallel Gemini tool calls: first step gets the shared AIMessage,
 		// subsequent steps get empty messageLog. LangChain's formatToToolMessages
@@ -402,7 +405,7 @@ export function buildSteps(
 				: []
 			: [buildIndividualAIMessage(toolId, toolName, toolInput, providerMetadata)];
 
-		const messageLog = [...announcementMessages, ...toolCallMessages];
+		const messageLog = [...toolCallMessages];
 
 		steps.push({
 			action: {
@@ -412,8 +415,6 @@ export function buildSteps(
 				messageLog,
 				toolCallId: toolInput?.id,
 				type: toolInput.type || 'tool_call',
-				announcement,
-				message,
 			},
 			observation,
 		});

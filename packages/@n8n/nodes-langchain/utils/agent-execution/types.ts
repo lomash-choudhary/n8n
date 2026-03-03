@@ -29,18 +29,16 @@ export type ToolCallRequest = {
  */
 export type ToolCallData = {
 	action: {
-		tool: string;
-		toolInput: Record<string, unknown>;
+		tool?: string;
+		toolInput?: Record<string, unknown>;
 		log: string | number | true | object;
 		messageLog?: AIMessage[];
-		toolCallId: IDataObject | GenericValue | GenericValue[] | IDataObject[];
+		toolCallId?: IDataObject | GenericValue | GenericValue[] | IDataObject[];
 		type: string | number | true | object;
 		/** Raw log text streamed by the LLM before a tool call */
 		announcement?: string;
-		/** User-facing announcement text (content after \n\n\n delimiter) */
-		message?: string;
 	};
-	observation: string;
+	observation?: string;
 };
 
 /**
