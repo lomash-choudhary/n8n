@@ -1603,7 +1603,7 @@ describe('buildSteps', () => {
 			expect(result[1].observation).toBe(JSON.stringify([{ temp: '72F' }]));
 		});
 
-		it('should NOT group parallel tool calls without Gemini signature', () => {
+		it('should group parallel tool calls into shared AIMessage even without Gemini signature', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -1658,11 +1658,14 @@ describe('buildSteps', () => {
 
 			expect(result).toHaveLength(2);
 
-			// Without Gemini signature, each step should have its own AIMessage
+			// With parallel grouping, first step gets the shared AIMessage with ALL tool_calls
 			expect(result[0].action.messageLog).toHaveLength(1);
-			expect(result[0].action.messageLog![0].tool_calls).toHaveLength(1);
-			expect(result[1].action.messageLog).toHaveLength(1);
-			expect(result[1].action.messageLog![0].tool_calls).toHaveLength(1);
+			expect(result[0].action.messageLog![0].tool_calls).toHaveLength(2);
+			expect(result[0].action.messageLog![0].tool_calls![0].name).toBe('Calculator');
+			expect(result[0].action.messageLog![0].tool_calls![1].name).toBe('Weather');
+
+			// Second step gets empty messageLog (shared AIMessage already on first step)
+			expect(result[1].action.messageLog).toHaveLength(0);
 		});
 
 		it('should not include additional_kwargs when no thought_signature present', () => {

@@ -111,6 +111,19 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 					name: step.action.tool ?? '',
 				}),
 			);
+		} else if (Array.isArray(step.action.messageLog) && step.action.messageLog.length === 0) {
+			// Parallel batch step: messageLog is intentionally empty ([]) because
+			// the shared AIMessage was already emitted by the first step in the batch.
+			// Only emit the ToolMessage for this tool call.
+			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
+
+			messages.push(
+				new ToolMessage({
+					content: step.observation ?? '',
+					tool_call_id: toolCallId,
+					name: step.action.tool ?? '',
+				}),
+			);
 		} else {
 			// Create synthetic AIMessage + ToolMessage for steps without messageLog
 			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool ?? '');

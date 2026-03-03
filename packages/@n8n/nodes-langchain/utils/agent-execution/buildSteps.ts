@@ -236,6 +236,34 @@ function buildIndividualAIMessage(
 }
 
 /**
+ * Builds a shared AIMessage for parallel tool calls.
+ *
+ * For parallel function calls, LangChain expects ALL function calls in a single AIMessage
+ * ("model" turn), followed by one ToolMessage per tool call. Splitting parallel tool calls
+ * into separate AIMessages breaks memory serialization and LangChain's message validation.
+ *
+ * @param processedTools - Array of processed tool responses to include
+ * @returns AIMessage with all tool calls combined
+ */
+function buildSharedAIMessage(processedTools: ProcessedToolResponse[]): AIMessage {
+	const allToolCalls = processedTools.map((pt) => ({
+		id: pt.toolId,
+		name: pt.toolName,
+		args: pt.toolInput,
+		type: 'tool_call' as const,
+	}));
+
+	const toolNames = processedTools.map((pt) => pt.nodeName).join(', ');
+
+	const content = `Calling tools: ${toolNames}`;
+
+	return new AIMessage({
+		content,
+		tool_calls: allToolCalls,
+	});
+}
+
+/**
  * Builds a shared AIMessage for parallel tool calls with Gemini thought signatures.
  *
  * For parallel function calls, Gemini requires ALL function calls in a single "model" turn
@@ -350,18 +378,21 @@ export function buildSteps(
 		});
 	}
 
-	// Check if this batch has Gemini thought signatures and multiple parallel tool calls.
-	// If so, we must group them into a single AIMessage because:
-	// 1. The thought_signature is cryptographically tied to the combined parallel call turn
-	// 2. Splitting into separate model turns invalidates the signature
-	// 3. Google's API requires matching function response parts per function call turn
+	// For parallel tool calls (batchTools.length > 1), we must group them into a single
+	// AIMessage because LangChain expects all parallel tool_calls in one "model" turn.
+	// Splitting into separate AIMessages breaks memory serialization.
+	//
+	// For Gemini with thought signatures, we use the specialized builder that includes
+	// the cryptographic signature in additional_kwargs.
 	const sharedThoughtSignature = batchTools.find((bt) => bt.providerMetadata.thoughtSignature)
 		?.providerMetadata.thoughtSignature;
 
-	const sharedAIMessage =
-		sharedThoughtSignature && batchTools.length > 1
+	let sharedAIMessage: AIMessage | undefined;
+	if (batchTools.length > 1) {
+		sharedAIMessage = sharedThoughtSignature
 			? buildSharedGeminiAIMessage(batchTools, sharedThoughtSignature)
-			: undefined;
+			: buildSharedAIMessage(batchTools);
+	}
 
 	// Second pass: build steps
 	for (let i = 0; i < batchTools.length; i++) {

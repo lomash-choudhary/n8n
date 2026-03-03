@@ -361,6 +361,56 @@ describe('memoryManagement', () => {
 			const result = buildMessagesFromSteps([]);
 			expect(result).toHaveLength(0);
 		});
+
+		it('should handle parallel tool calls with shared AIMessage (first step has AIMessage, subsequent steps have empty messageLog)', () => {
+			// This is the pattern produced by buildSteps for parallel tool calls:
+			// - First step: messageLog = [sharedAIMessage with ALL tool_calls]
+			// - Subsequent steps: messageLog = [] (empty array)
+			const sharedAIMessage = new AIMessage({
+				content: 'Calling tools: Calculator, Weather',
+				tool_calls: [
+					{ id: 'call-1', name: 'calculator', args: { expression: '2+2' }, type: 'tool_call' },
+					{ id: 'call-2', name: 'weather', args: { location: 'NYC' }, type: 'tool_call' },
+				],
+			});
+
+			const steps: ToolCallData[] = [
+				{
+					action: {
+						tool: 'calculator',
+						toolInput: { expression: '2+2' },
+						log: 'Calc',
+						messageLog: [sharedAIMessage],
+						toolCallId: 'call-1',
+						type: 'tool_call',
+					},
+					observation: '4',
+				},
+				{
+					action: {
+						tool: 'weather',
+						toolInput: { location: 'NYC' },
+						log: 'Weather',
+						messageLog: [], // Empty array = parallel batch step
+						toolCallId: 'call-2',
+						type: 'tool_call',
+					},
+					observation: 'Sunny, 72°F',
+				},
+			];
+
+			const result = buildMessagesFromSteps(steps);
+
+			// Should produce: [SharedAIMessage, ToolMsg1, ToolMsg2]
+			expect(result).toHaveLength(3);
+			expect(result[0]).toBe(sharedAIMessage);
+			expect(result[1]).toBeInstanceOf(ToolMessage);
+			expect(result[1].content).toBe('4');
+			expect((result[1] as ToolMessage).tool_call_id).toBe('call-1');
+			expect(result[2]).toBeInstanceOf(ToolMessage);
+			expect(result[2].content).toBe('Sunny, 72°F');
+			expect((result[2] as ToolMessage).tool_call_id).toBe('call-2');
+		});
 	});
 
 	describe('saveToMemory with steps (message-based storage)', () => {
