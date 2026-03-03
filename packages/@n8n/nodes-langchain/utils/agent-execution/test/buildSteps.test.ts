@@ -715,7 +715,7 @@ describe('buildSteps', () => {
 		});
 	});
 
-	describe('Agent configuration toggles (saveAIAnnouncements & clearToolCallInputInformation)', () => {
+	describe('Agent configuration toggles (saveAIAnnouncements)', () => {
 		it('should include announcement as separate AIMessage and tool calling info by default if options are missing', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
@@ -756,9 +756,12 @@ describe('buildSteps', () => {
 			// Second message: tool-calling AIMessage
 			expect(messageLog![1].content).toContain('Calling Calculator with input:');
 			expect(messageLog![1].tool_calls).toHaveLength(1);
+			// Check announcement and message fields
+			expect(result[0].action.announcement).toBe('Calculating 2+2 now.');
+			expect(result[0].action.message).toBe('Calculating 2+2 now.');
 		});
 
-		it('should respect saveAnnouncements and keep tool calling in scratchpad regardless of clearToolCallInputInformation', () => {
+		it('should respect saveAnnouncements toggle', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -777,7 +780,6 @@ describe('buildSteps', () => {
 								options: {
 									enableStreaming: true,
 									saveAnnouncements: false,
-									clearToolCallInputInformation: true,
 								},
 							},
 						},
@@ -798,8 +800,10 @@ describe('buildSteps', () => {
 			expect(messageLog).toBeDefined();
 			// No announcement AIMessage (saveAnnouncements is false), only tool-calling AIMessage
 			expect(messageLog).toHaveLength(1);
-			// Tool-calling content is present in scratchpad even if clearToolCallInputInformation is true
 			expect(messageLog![0].content).toContain('Calling Calculator with input:');
+			// announcement and message are still populated on the step
+			expect(result[0].action.announcement).toBe('Calculating 2+2 now.');
+			expect(result[0].action.message).toBe('Calculating 2+2 now.');
 		});
 
 		it('should ignore toggles if streaming is off', () => {
@@ -821,7 +825,6 @@ describe('buildSteps', () => {
 								options: {
 									enableStreaming: false,
 									saveAnnouncements: false,
-									clearToolCallInputInformation: true,
 								},
 							},
 						},
@@ -847,6 +850,48 @@ describe('buildSteps', () => {
 			expect(messageLog![0].tool_calls).toEqual([]);
 			// Tool-calling AIMessage
 			expect(messageLog![1].content).toContain('Calling Calculator with input:');
+		});
+
+		it('should split announcement into log (raw) and message (after \n\n\n delimiter)', () => {
+			const rawAnnouncement = 'thinking about it...\n\n\nHere is my announcement text';
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_123',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_123',
+							metadata: {
+								itemIndex: 0,
+								announcement: rawAnnouncement,
+							},
+						},
+						data: {
+							data: { ai_tool: [] },
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex);
+
+			// announcement = raw log (full text)
+			expect(result[0].action.announcement).toBe(rawAnnouncement);
+			// message = text after \n\n\n delimiter
+			expect(result[0].action.message).toBe('Here is my announcement text');
+			// The AIMessage content should use the message (user-facing text)
+			const messageLog = result[0].action.messageLog;
+			expect(messageLog![0].content).toBe('Here is my announcement text');
 		});
 	});
 

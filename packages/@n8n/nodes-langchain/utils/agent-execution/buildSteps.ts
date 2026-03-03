@@ -374,6 +374,12 @@ export function buildSteps(
 
 		// Extract clean announcement text from metadata (falling back to empty string so it surfaces in intermediate steps)
 		const announcement = tool.action.metadata?.announcement || '';
+		// Extract the user-facing message: text after the last \n\n\n delimiter
+		const message = announcement
+			? announcement.includes('\n\n\n')
+				? announcement.split('\n\n\n').pop()!.trim()
+				: announcement
+			: '';
 
 		// Build announcement as a separate AIMessage (only for the first tool in the batch
 		// to avoid duplicating the same streamed text across parallel calls)
@@ -383,7 +389,7 @@ export function buildSteps(
 			const isStreaming = toolOptions?.enableStreaming === true;
 			const saveAnnouncements = isStreaming ? toolOptions?.saveAnnouncements !== false : true;
 			if (saveAnnouncements) {
-				announcementMessages.push(new AIMessage({ content: announcement }));
+				announcementMessages.push(new AIMessage({ content: message || announcement }));
 			}
 		}
 
@@ -407,6 +413,7 @@ export function buildSteps(
 				toolCallId: toolInput?.id,
 				type: toolInput.type || 'tool_call',
 				announcement,
+				message,
 			},
 			observation,
 		});

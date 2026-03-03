@@ -74,12 +74,8 @@ export function extractToolCallId(
  * // Returns: [AIMessage with tool_calls, ToolMessage with result]
  * ```
  */
-export function buildMessagesFromSteps(
-	steps: ToolCallData[],
-	options?: Record<string, unknown>,
-): BaseMessage[] {
+export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 	const messages: BaseMessage[] = [];
-	const clearToolCallInputInformation = options?.clearToolCallInputInformation === true;
 
 	for (let i = 0; i < steps.length; i++) {
 		const step = steps[i];
@@ -88,14 +84,6 @@ export function buildMessagesFromSteps(
 		if (messageLog.length > 0) {
 			// Push all messages from the log (may include announcement + tool-call AIMessages)
 			for (const msg of messageLog) {
-				if (
-					clearToolCallInputInformation &&
-					msg instanceof AIMessage &&
-					msg.tool_calls &&
-					msg.tool_calls.length > 0
-				) {
-					continue;
-				}
 				messages.push(msg);
 			}
 
@@ -116,21 +104,19 @@ export function buildMessagesFromSteps(
 			// Create synthetic AIMessage + ToolMessage for steps without messageLog
 			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool);
 
-			if (!clearToolCallInputInformation) {
-				messages.push(
-					new AIMessage({
-						content: `Calling ${step.action.tool} with input: ${JSON.stringify(step.action.toolInput)}`,
-						tool_calls: [
-							{
-								id: toolCallId,
-								name: step.action.tool,
-								args: step.action.toolInput,
-								type: 'tool_call',
-							},
-						],
-					}),
-				);
-			}
+			messages.push(
+				new AIMessage({
+					content: `Calling ${step.action.tool} with input: ${JSON.stringify(step.action.toolInput)}`,
+					tool_calls: [
+						{
+							id: toolCallId,
+							name: step.action.tool,
+							args: step.action.toolInput,
+							type: 'tool_call',
+						},
+					],
+				}),
+			);
 
 			messages.push(
 				new ToolMessage({
@@ -274,7 +260,6 @@ export async function saveToMemory(
 	memory?: BaseChatMemory,
 	steps?: ToolCallData[],
 	previousStepsCount?: number,
-	options?: Record<string, unknown>,
 ): Promise<void> {
 	if (!output || !memory) {
 		return;
@@ -313,7 +298,7 @@ export async function saveToMemory(
 	messages.push(new HumanMessage(input));
 
 	// 2. Tool call sequence (AIMessage with tool_calls → ToolMessage for each)
-	const toolMessages = buildMessagesFromSteps(newSteps, options);
+	const toolMessages = buildMessagesFromSteps(newSteps);
 	messages.push.apply(messages, toolMessages);
 
 	// 3. Final AI response (no tool_calls)
