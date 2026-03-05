@@ -37,6 +37,8 @@ export type ToolCallData = {
 		type: string | number | true | object;
 		/** Raw log text streamed by the LLM before a tool call */
 		announcement?: string;
+		/** When true, this step is for display only and should not be saved to memory */
+		skipInMemory?: boolean;
 	};
 	observation?: string;
 };

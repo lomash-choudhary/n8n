@@ -48,4 +48,18 @@ export const commonOptions: INodeProperties[] = [
 			},
 		},
 	},
+	{
+		displayName: 'Clean Tool Call Content',
+		name: 'cleanToolCallContent',
+		type: 'boolean',
+		default: true,
+		description:
+			'When enabled, removes redundant "Calling tool with input" text by merging the AI announcement into the tool call message',
+		displayOptions: {
+			show: {
+				enableStreaming: [true],
+				saveAnnouncements: [true],
+			},
+		},
+	},
 ];

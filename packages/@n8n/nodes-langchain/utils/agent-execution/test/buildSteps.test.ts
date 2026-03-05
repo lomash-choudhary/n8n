@@ -795,6 +795,143 @@ describe('buildSteps', () => {
 			expect(result).toHaveLength(1);
 			expect(result[0].action.type).toBe('tool_call');
 		});
+
+		it('should merge announcement into tool call AIMessage when cleanToolCallContent is on', () => {
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_123',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_123',
+							metadata: {
+								itemIndex: 0,
+								announcement: 'Let me calculate 2+2 for you.',
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: true,
+									cleanToolCallContent: true,
+								},
+							},
+						},
+						data: {
+							data: { ai_tool: [[{ json: { result: '4' } }]] },
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex);
+
+			// Announcement step still exists for display, but marked skipInMemory
+			expect(result).toHaveLength(2);
+			expect(result[0].action.type).toBe('announcement');
+			expect(result[0].action.log).toBe('Let me calculate 2+2 for you.');
+			expect(result[0].action.skipInMemory).toBe(true);
+
+			// Tool call AIMessage content = announcement text, NOT "Calling Calculator with input:"
+			expect(result[1].action.type).toBe('tool_call');
+			expect(result[1].action.tool).toBe('Calculator');
+			const messageLog = result[1].action.messageLog;
+			expect(messageLog).toHaveLength(1);
+			expect(messageLog![0].content).toBe('Let me calculate 2+2 for you.');
+			expect(messageLog![0].content).not.toContain('Calling Calculator');
+			expect(messageLog![0].tool_calls).toHaveLength(1);
+		});
+
+		it('should fall back to "Calling toolname" when cleanToolCallContent is on but no announcement', () => {
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_123',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_123',
+							metadata: {
+								itemIndex: 0,
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: true,
+									cleanToolCallContent: true,
+								},
+							},
+						},
+						data: {
+							data: { ai_tool: [[{ json: { result: '4' } }]] },
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex);
+			expect(result).toHaveLength(1);
+			expect(result[0].action.messageLog![0].content).toContain('Calling Calculator with input:');
+		});
+
+		it('should keep separate announcement step when cleanToolCallContent is off', () => {
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_123',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_123',
+							metadata: {
+								itemIndex: 0,
+								announcement: 'Let me calculate 2+2 for you.',
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: true,
+									cleanToolCallContent: false,
+								},
+							},
+						},
+						data: {
+							data: { ai_tool: [[{ json: { result: '4' } }]] },
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex);
+
+			// Should have separate announcement step + tool call step (old behavior)
+			expect(result).toHaveLength(2);
+			expect(result[0].action.type).toBe('announcement');
+			expect(result[0].action.log).toBe('Let me calculate 2+2 for you.');
+			expect(result[1].action.type).toBe('tool_call');
+			expect(result[1].action.messageLog![0].content).toContain('Calling Calculator with input:');
+		});
 	});
 
 	describe('Anthropic thinking blocks reconstruction', () => {

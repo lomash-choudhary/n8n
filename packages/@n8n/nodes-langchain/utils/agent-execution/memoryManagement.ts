@@ -80,6 +80,11 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 	for (let i = 0; i < steps.length; i++) {
 		const step = steps[i];
 
+		// Skip display-only steps (e.g., announcements merged into tool call AIMessage)
+		if (step.action.skipInMemory) {
+			continue;
+		}
+
 		// Announcement steps → store as AIMessage in memory
 		// (These only exist when saveAnnouncements is enabled)
 		if (step.action.type === 'announcement') {
