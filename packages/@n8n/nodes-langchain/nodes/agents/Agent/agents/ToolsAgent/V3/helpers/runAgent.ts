@@ -46,7 +46,9 @@ export async function runAgent(
 
 	const invokeParams = {
 		// steps are passed to the ToolCallingAgent in the runnable sequence to keep track of tool calls
-		steps,
+		// Filter out announcement steps — they are only for display/memory,
+		// not for the agent scratchpad (LangChain's formatToToolMessages doesn't understand them)
+		steps: steps.filter((s) => s.action.type !== 'announcement'),
 		input,
 		system_message: options.systemMessage ?? SYSTEM_MESSAGE,
 		formatting_instructions:

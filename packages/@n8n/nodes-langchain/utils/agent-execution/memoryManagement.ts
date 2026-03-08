@@ -4,7 +4,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { AIMessage, HumanMessage, ToolMessage, trimMessages } from '@langchain/core/messages';
 import type { IDataObject, GenericValue } from 'n8n-workflow';
 
-import type { ToolCallData } from './types';
+import type { ToolCallData, ActionStepData, AnnouncementStepData } from './types';
 
 /**
  * Extracts a string tool_call_id from various possible formats.
@@ -83,7 +83,24 @@ export function buildMessagesFromSteps(
 
 	for (let i = 0; i < steps.length; i++) {
 		const step = steps[i];
-		const messageLog = step.action.messageLog ?? [];
+
+		// Announcement steps → either skip or store as AIMessage in memory
+		if (step.action.type === 'announcement') {
+			const announcementStep = step as AnnouncementStepData;
+			// Skip display-only announcements (merged into tool call AIMessage)
+			if (announcementStep.action.skipInMemory) {
+				continue;
+			}
+			const logContent =
+				typeof announcementStep.action.log === 'string' ? announcementStep.action.log : '';
+			if (logContent) {
+				messages.push(new AIMessage({ content: logContent }));
+			}
+			continue;
+		}
+
+		const actionStep = step as ActionStepData;
+		const messageLog = actionStep.action.messageLog ?? [];
 
 		if (messageLog.length > 0) {
 			// Push all messages from the log (may include announcement + tool-call AIMessages)
@@ -103,28 +120,28 @@ export function buildMessagesFromSteps(
 			const messageWithToolCalls = messageLog.find((m) => m.tool_calls && m.tool_calls.length > 0);
 			const toolCallId =
 				messageWithToolCalls?.tool_calls?.[0]?.id ??
-				extractToolCallId(step.action.toolCallId, step.action.tool);
+				extractToolCallId(actionStep.action.toolCallId, actionStep.action.tool);
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation,
+					content: actionStep.observation,
 					tool_call_id: toolCallId,
-					name: step.action.tool,
+					name: actionStep.action.tool,
 				}),
 			);
 		} else {
 			// Create synthetic AIMessage + ToolMessage for steps without messageLog
-			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool);
+			const toolCallId = extractToolCallId(actionStep.action.toolCallId, actionStep.action.tool);
 
 			if (!clearToolCallInputInformation) {
 				messages.push(
 					new AIMessage({
-						content: `Calling ${step.action.tool} with input: ${JSON.stringify(step.action.toolInput)}`,
+						content: `Calling ${actionStep.action.tool} with input: ${JSON.stringify(actionStep.action.toolInput)}`,
 						tool_calls: [
 							{
 								id: toolCallId,
-								name: step.action.tool,
-								args: step.action.toolInput,
+								name: actionStep.action.tool,
+								args: actionStep.action.toolInput,
 								type: 'tool_call',
 							},
 						],
@@ -134,9 +151,9 @@ export function buildMessagesFromSteps(
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation,
+					content: actionStep.observation,
 					tool_call_id: toolCallId,
-					name: step.action.tool,
+					name: actionStep.action.tool,
 				}),
 			);
 		}
@@ -164,6 +181,7 @@ export function buildMessagesFromSteps(
  */
 export function buildToolContext(steps: ToolCallData[]): string {
 	return steps
+		.filter((step): step is ActionStepData => step.action.type !== 'announcement')
 		.map(
 			(step) =>
 				`Tool: ${step.action.tool}, Input: ${JSON.stringify(step.action.toolInput)}, Result: ${step.observation}`,

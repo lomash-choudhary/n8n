@@ -49,15 +49,16 @@ export const commonOptions: INodeProperties[] = [
 		},
 	},
 	{
-		displayName: 'Clear Tool Call Input Information',
-		name: 'clearToolCallInputInformation',
+		displayName: 'Clean Tool Call Content',
+		name: 'cleanToolCallContent',
 		type: 'boolean',
-		default: false,
+		default: true,
 		description:
-			'Whether or not to clear the raw generic tool calling string (e.g., "Calling <tool_name> with input: <tool_input>") from the attached memory (it will still be visible in the agent run context)',
+			'Whether to remove redundant "Calling tool with input" text by merging the AI announcement into the tool call message',
 		displayOptions: {
 			show: {
 				enableStreaming: [true],
+				saveAnnouncements: [true],
 			},
 		},
 	},
