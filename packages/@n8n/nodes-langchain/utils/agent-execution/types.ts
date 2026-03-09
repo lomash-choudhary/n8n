@@ -24,24 +24,38 @@ export type ToolCallRequest = {
 };
 
 /**
- * Represents a tool call action and its observation result.
- * Used for building agent steps and maintaining conversation context.
+ * Represents an announcement step during agent execution.
  */
-export type ToolCallData = {
+export type AnnouncementStepData = {
 	action: {
-		tool?: string;
-		toolInput?: Record<string, unknown>;
+		type: 'announcement';
 		log: string | number | true | object;
-		messageLog?: AIMessage[];
-		toolCallId?: IDataObject | GenericValue | GenericValue[] | IDataObject[];
-		type: string | number | true | object;
-		/** Raw log text streamed by the LLM before a tool call */
+		/** Clean announcement text streamed by the LLM before a tool call */
 		announcement?: string;
 		/** When true, this step is for display only and should not be saved to memory */
 		skipInMemory?: boolean;
 	};
-	observation?: string;
 };
+
+/**
+ * Represents a tool call action and its observation result.
+ */
+export type ActionStepData = {
+	action: {
+		tool: string;
+		toolInput: Record<string, unknown>;
+		log: string | number | true | object;
+		messageLog?: AIMessage[];
+		toolCallId: IDataObject | GenericValue | GenericValue[] | IDataObject[];
+		type: string | number | true | object;
+	};
+	observation: string;
+};
+
+/**
+ * A step in the agent execution, either a tool call action or an announcement.
+ */
+export type ToolCallData = ActionStepData | AnnouncementStepData;
 
 /**
  * Result from an agent execution, optionally including tool calls and intermediate steps.
@@ -156,10 +170,10 @@ export type RequestResponseMetadata = {
 	anthropic?: AnthropicThinkingMetadata;
 	/** HITL (Human-in-the-Loop) metadata - presence indicates this is an HITL tool action */
 	hitl?: HitlMetadata;
-	/** Raw announcement text streamed by the LLM before a tool call */
+	/** Clean announcement text streamed by the LLM before a tool call */
 	announcement?: string;
-	/** Agent options like saveAnnouncements and enableStreaming */
-	options?: Record<string, unknown>;
+	/** Agent options like saveAnnouncements and clearToolCallInputInformation */
+	options?: Record<string, unknown> & { clearToolCallInputInformation?: boolean };
 };
 
 /**
