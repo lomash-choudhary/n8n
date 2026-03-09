@@ -357,20 +357,16 @@ describe('memoryManagement', () => {
 			expect(result[3]).toBeInstanceOf(ToolMessage);
 		});
 
-		it('should return empty array for empty steps', () => {
-			const result = buildMessagesFromSteps([]);
-			expect(result).toHaveLength(0);
-		});
-
-		it('should handle parallel tool calls with shared AIMessage (first step has AIMessage, subsequent steps have empty messageLog)', () => {
-			// This is the pattern produced by buildSteps for parallel tool calls:
-			// - First step: messageLog = [sharedAIMessage with ALL tool_calls]
-			// - Subsequent steps: messageLog = [] (empty array)
-			const sharedAIMessage = new AIMessage({
-				content: 'Calling tools: Calculator, Weather',
+		it('should filter AIMessage with tool_calls when clearToolCallInputInformation is true', () => {
+			const aiMessage = new AIMessage({
+				content: 'Let me calculate that',
 				tool_calls: [
-					{ id: 'call-1', name: 'calculator', args: { expression: '2+2' }, type: 'tool_call' },
-					{ id: 'call-2', name: 'weather', args: { location: 'NYC' }, type: 'tool_call' },
+					{
+						id: 'call-123',
+						name: 'calculator',
+						args: { expression: '2+2' },
+						type: 'tool_call',
+					},
 				],
 			});
 
@@ -379,37 +375,48 @@ describe('memoryManagement', () => {
 					action: {
 						tool: 'calculator',
 						toolInput: { expression: '2+2' },
-						log: 'Calc',
-						messageLog: [sharedAIMessage],
-						toolCallId: 'call-1',
+						log: 'Using calculator',
+						messageLog: [aiMessage],
+						toolCallId: 'call-123',
 						type: 'tool_call',
 					},
 					observation: '4',
 				},
+			];
+
+			const result = buildMessagesFromSteps(steps, { clearToolCallInputInformation: true });
+
+			expect(result).toHaveLength(1);
+			expect(result[0]).toBeInstanceOf(ToolMessage);
+			expect(result[0].content).toBe('4');
+			expect((result[0] as ToolMessage).tool_call_id).toBe('call-123');
+			expect((result[0] as ToolMessage).name).toBe('calculator');
+		});
+
+		it('should not create synthetic AIMessage when clearToolCallInputInformation is true and messageLog is missing', () => {
+			const steps: ToolCallData[] = [
 				{
 					action: {
-						tool: 'weather',
-						toolInput: { location: 'NYC' },
-						log: 'Weather',
-						messageLog: [], // Empty array = parallel batch step
-						toolCallId: 'call-2',
+						tool: 'search',
+						toolInput: { query: 'test' },
+						log: 'Searching',
+						toolCallId: 'call-456',
 						type: 'tool_call',
 					},
-					observation: 'Sunny, 72°F',
+					observation: 'Found results',
 				},
 			];
 
-			const result = buildMessagesFromSteps(steps);
+			const result = buildMessagesFromSteps(steps, { clearToolCallInputInformation: true });
 
-			// Should produce: [SharedAIMessage, ToolMsg1, ToolMsg2]
-			expect(result).toHaveLength(3);
-			expect(result[0]).toBe(sharedAIMessage);
-			expect(result[1]).toBeInstanceOf(ToolMessage);
-			expect(result[1].content).toBe('4');
-			expect((result[1] as ToolMessage).tool_call_id).toBe('call-1');
-			expect(result[2]).toBeInstanceOf(ToolMessage);
-			expect(result[2].content).toBe('Sunny, 72°F');
-			expect((result[2] as ToolMessage).tool_call_id).toBe('call-2');
+			expect(result).toHaveLength(1);
+			expect(result[0]).toBeInstanceOf(ToolMessage);
+			expect((result[0] as ToolMessage).tool_call_id).toBe('call-456');
+		});
+
+		it('should return empty array for empty steps', () => {
+			const result = buildMessagesFromSteps([]);
+			expect(result).toHaveLength(0);
 		});
 	});
 

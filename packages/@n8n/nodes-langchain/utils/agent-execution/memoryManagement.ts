@@ -4,7 +4,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { AIMessage, HumanMessage, ToolMessage, trimMessages } from '@langchain/core/messages';
 import type { IDataObject, GenericValue } from 'n8n-workflow';
 
-import type { ToolCallData } from './types';
+import type { ToolCallData, ActionStepData, AnnouncementStepData } from './types';
 
 /**
  * Extracts a string tool_call_id from various possible formats.
@@ -74,32 +74,45 @@ export function extractToolCallId(
  * // Returns: [AIMessage with tool_calls, ToolMessage with result]
  * ```
  */
-export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
+export function buildMessagesFromSteps(
+	steps: ToolCallData[],
+	options?: Record<string, unknown>,
+): BaseMessage[] {
 	const messages: BaseMessage[] = [];
+	const clearToolCallInputInformation = options?.clearToolCallInputInformation === true;
 
 	for (let i = 0; i < steps.length; i++) {
 		const step = steps[i];
 
-		// Skip display-only steps (e.g., announcements merged into tool call AIMessage)
-		if (step.action.skipInMemory) {
-			continue;
-		}
-
-		// Announcement steps → store as AIMessage in memory
-		// (These only exist when saveAnnouncements is enabled)
+		// Announcement steps → either skip or store as AIMessage in memory
 		if (step.action.type === 'announcement') {
-			const logContent = typeof step.action.log === 'string' ? step.action.log : '';
+			const announcementStep = step as AnnouncementStepData;
+			// Skip display-only announcements (merged into tool call AIMessage)
+			if (announcementStep.action.skipInMemory) {
+				continue;
+			}
+			const logContent =
+				typeof announcementStep.action.log === 'string' ? announcementStep.action.log : '';
 			if (logContent) {
 				messages.push(new AIMessage({ content: logContent }));
 			}
 			continue;
 		}
 
-		const messageLog = step.action.messageLog ?? [];
+		const actionStep = step as ActionStepData;
+		const messageLog = actionStep.action.messageLog ?? [];
 
 		if (messageLog.length > 0) {
 			// Push all messages from the log (may include announcement + tool-call AIMessages)
 			for (const msg of messageLog) {
+				if (
+					clearToolCallInputInformation &&
+					msg instanceof AIMessage &&
+					msg.tool_calls &&
+					msg.tool_calls.length > 0
+				) {
+					continue;
+				}
 				messages.push(msg);
 			}
 
@@ -107,51 +120,56 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
 			const messageWithToolCalls = messageLog.find((m) => m.tool_calls && m.tool_calls.length > 0);
 			const toolCallId =
 				messageWithToolCalls?.tool_calls?.[0]?.id ??
-				extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
+				extractToolCallId(actionStep.action.toolCallId, actionStep.action.tool);
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation ?? '',
+					content: actionStep.observation,
 					tool_call_id: toolCallId,
-					name: step.action.tool ?? '',
+					name: actionStep.action.tool,
 				}),
 			);
-		} else if (Array.isArray(step.action.messageLog) && step.action.messageLog.length === 0) {
+		} else if (
+			Array.isArray(actionStep.action.messageLog) &&
+			actionStep.action.messageLog.length === 0
+		) {
 			// Parallel batch step: messageLog is intentionally empty ([]) because
 			// the shared AIMessage was already emitted by the first step in the batch.
 			// Only emit the ToolMessage for this tool call.
-			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
+			const toolCallId = extractToolCallId(actionStep.action.toolCallId, actionStep.action.tool);
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation ?? '',
+					content: actionStep.observation,
 					tool_call_id: toolCallId,
-					name: step.action.tool ?? '',
+					name: actionStep.action.tool,
 				}),
 			);
 		} else {
 			// Create synthetic AIMessage + ToolMessage for steps without messageLog
-			const toolCallId = extractToolCallId(step.action.toolCallId, step.action.tool ?? '');
+			const toolCallId = extractToolCallId(actionStep.action.toolCallId, actionStep.action.tool);
 
-			messages.push(
-				new AIMessage({
-					content: `Calling ${step.action.tool} with input: ${JSON.stringify(step.action.toolInput)}`,
-					tool_calls: [
-						{
-							id: toolCallId,
-							name: step.action.tool ?? '',
-							args: step.action.toolInput ?? {},
-							type: 'tool_call',
-						},
-					],
-				}),
-			);
+			if (!clearToolCallInputInformation) {
+				messages.push(
+					new AIMessage({
+						content: `Calling ${actionStep.action.tool} with input: ${JSON.stringify(actionStep.action.toolInput)}`,
+						tool_calls: [
+							{
+								id: toolCallId,
+								name: actionStep.action.tool,
+								args: actionStep.action.toolInput,
+								type: 'tool_call',
+							},
+						],
+					}),
+				);
+			}
 
 			messages.push(
 				new ToolMessage({
-					content: step.observation ?? '',
+					content: actionStep.observation,
 					tool_call_id: toolCallId,
-					name: step.action.tool ?? '',
+					name: actionStep.action.tool,
 				}),
 			);
 		}
@@ -179,7 +197,7 @@ export function buildMessagesFromSteps(steps: ToolCallData[]): BaseMessage[] {
  */
 export function buildToolContext(steps: ToolCallData[]): string {
 	return steps
-		.filter((step) => step.action.type !== 'announcement')
+		.filter((step): step is ActionStepData => step.action.type !== 'announcement')
 		.map(
 			(step) =>
 				`Tool: ${step.action.tool}, Input: ${JSON.stringify(step.action.toolInput)}, Result: ${step.observation}`,
@@ -290,6 +308,7 @@ export async function saveToMemory(
 	memory?: BaseChatMemory,
 	steps?: ToolCallData[],
 	previousStepsCount?: number,
+	options?: Record<string, unknown>,
 ): Promise<void> {
 	if (!output || !memory) {
 		return;
@@ -328,7 +347,7 @@ export async function saveToMemory(
 	messages.push(new HumanMessage(input));
 
 	// 2. Tool call sequence (AIMessage with tool_calls → ToolMessage for each)
-	const toolMessages = buildMessagesFromSteps(newSteps);
+	const toolMessages = buildMessagesFromSteps(newSteps, options);
 	messages.push.apply(messages, toolMessages);
 
 	// 3. Final AI response (no tool_calls)

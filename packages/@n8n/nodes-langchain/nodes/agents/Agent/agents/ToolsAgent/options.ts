@@ -54,7 +54,7 @@ export const commonOptions: INodeProperties[] = [
 		type: 'boolean',
 		default: true,
 		description:
-			'When enabled, removes redundant "Calling tool with input" text by merging the AI announcement into the tool call message',
+			'Whether to remove redundant "Calling tool with input" text by merging the AI announcement into the tool call message',
 		displayOptions: {
 			show: {
 				enableStreaming: [true],

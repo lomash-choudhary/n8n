@@ -8,6 +8,7 @@ import type {
 	ThinkingContentBlock,
 	RedactedThinkingContentBlock,
 	ToolUseContentBlock,
+	ActionStepData,
 } from './types';
 
 /**
@@ -367,7 +368,11 @@ export function buildSteps(
 		};
 		if (!tool.data) continue;
 
-		const existingStep = steps.find((s) => s.action.toolCallId === toolInput.id);
+		const existingStep = steps.find(
+			(s) =>
+				s.action.type !== 'announcement' &&
+				(s as ActionStepData).action.toolCallId === toolInput.id,
+		);
 		if (existingStep) continue;
 
 		const providerMetadata = extractProviderMetadata(tool.action.metadata);
@@ -384,12 +389,11 @@ export function buildSteps(
 		});
 	}
 
-	// For parallel tool calls (batchTools.length > 1), we must group them into a single
-	// AIMessage because LangChain expects all parallel tool_calls in one "model" turn.
-	// Splitting into separate AIMessages breaks memory serialization.
-	//
-	// For Gemini with thought signatures, we use the specialized builder that includes
-	// the cryptographic signature in additional_kwargs.
+	// Check if this batch has Gemini thought signatures and multiple parallel tool calls.
+	// If so, we must group them into a single AIMessage because:
+	// 1. The thought_signature is cryptographically tied to the combined parallel call turn
+	// 2. Splitting into separate model turns invalidates the signature
+	// 3. Google's API requires matching function response parts per function call turn
 	const sharedThoughtSignature = batchTools.find((bt) => bt.providerMetadata.thoughtSignature)
 		?.providerMetadata.thoughtSignature;
 
@@ -422,7 +426,7 @@ export function buildSteps(
 		// Exclude metadata fields (id, log, type) from the tool input forwarded to the result
 		const { id, log, type, ...toolInputForResult } = toolInput;
 
-		// Extract announcement text from metadata
+		// Extract clean announcement text from metadata (falling back to empty string so it surfaces in intermediate steps)
 		const announcement = tool.action.metadata?.announcement || '';
 
 		// Determine if we should merge announcement into the tool call AIMessage
@@ -432,6 +436,7 @@ export function buildSteps(
 
 		// Push a separate announcement step (only for the first tool in the batch
 		// to avoid duplicating the same streamed text across parallel calls)
+		const announcementMessages: AIMessage[] = [];
 		if (i === 0 && announcement) {
 			const toolOptions = tool.action.metadata?.options as Record<string, unknown> | undefined;
 			const isStreaming = toolOptions?.enableStreaming === true;
@@ -467,7 +472,7 @@ export function buildSteps(
 					),
 				];
 
-		const messageLog = [...toolCallMessages];
+		const messageLog = [...announcementMessages, ...toolCallMessages];
 
 		steps.push({
 			action: {

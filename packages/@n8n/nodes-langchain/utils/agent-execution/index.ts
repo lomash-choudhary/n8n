@@ -21,6 +21,8 @@ export { processHitlResponses, type HitlProcessingResult } from './processHitlRe
 export type {
 	ToolCallRequest,
 	ToolCallData,
+	ActionStepData,
+	AnnouncementStepData,
 	AgentResult,
 	RequestResponseMetadata,
 	ToolMetadata,

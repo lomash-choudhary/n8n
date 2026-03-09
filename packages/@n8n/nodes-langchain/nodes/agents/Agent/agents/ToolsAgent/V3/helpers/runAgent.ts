@@ -90,13 +90,7 @@ export async function runAgent(
 		}
 		// Save conversation to memory including any tool call context
 		if (memory && input && result?.output) {
-			const saveAnnouncements = options.enableStreaming
-				? options.saveAnnouncements !== false
-				: true;
-			const previousCount = !saveAnnouncements
-				? response?.metadata?.previousRequests?.length
-				: undefined;
-			await saveToMemory(input, result.output, memory, steps, previousCount);
+			await saveToMemory(input, result.output, memory, steps, undefined, options);
 		}
 
 		if (options.returnIntermediateSteps && steps.length > 0) {
@@ -116,13 +110,14 @@ export async function runAgent(
 		if ('returnValues' in modelResponse) {
 			// Save conversation to memory including any tool call context
 			if (memory && input && modelResponse.returnValues.output) {
-				const saveAnnouncements = options.enableStreaming
-					? options.saveAnnouncements !== false
-					: true;
-				const previousCount = !saveAnnouncements
-					? response?.metadata?.previousRequests?.length
-					: undefined;
-				await saveToMemory(input, modelResponse.returnValues.output, memory, steps, previousCount);
+				await saveToMemory(
+					input,
+					modelResponse.returnValues.output,
+					memory,
+					steps,
+					undefined,
+					options,
+				);
 			}
 			// Include intermediate steps if requested
 			const result = { ...modelResponse.returnValues };
