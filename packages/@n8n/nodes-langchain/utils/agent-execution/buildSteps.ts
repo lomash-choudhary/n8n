@@ -414,9 +414,15 @@ export function buildSteps(
 
 	let sharedAIMessage: AIMessage | undefined;
 	if (batchTools.length > 1) {
-		sharedAIMessage = sharedThoughtSignature
-			? buildSharedGeminiAIMessage(batchTools, sharedThoughtSignature, sharedContentOverride)
-			: buildSharedAIMessage(batchTools, sharedContentOverride);
+		if (sharedThoughtSignature) {
+			sharedAIMessage = buildSharedGeminiAIMessage(
+				batchTools,
+				sharedThoughtSignature,
+				sharedContentOverride,
+			);
+		} else if (saveAnnouncements) {
+			sharedAIMessage = buildSharedAIMessage(batchTools, sharedContentOverride);
+		}
 	}
 
 	// Second pass: build steps

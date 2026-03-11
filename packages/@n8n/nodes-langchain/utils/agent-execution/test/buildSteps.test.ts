@@ -1741,7 +1741,7 @@ describe('buildSteps', () => {
 			expect(result[1].observation).toBe(JSON.stringify([{ temp: '72F' }]));
 		});
 
-		it('should NOT group parallel tool calls without Gemini signature', () => {
+		it('should group parallel tool calls into shared AIMessage when saveAnnouncements defaults to on', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -1796,13 +1796,171 @@ describe('buildSteps', () => {
 
 			expect(result).toHaveLength(2);
 
-			// Without Gemini signature, wait, actually we group them unconditionally now
-			// so they share the same messageLog.
-			// Currently `buildSharedAIMessage` groups ALL batch tools together unconditionally.
-			// Update the tests to match current behavior:
+			// Without options, saveAnnouncements defaults to true,
+			// so parallel tools are grouped into a shared AIMessage
 			expect(result[0].action.messageLog).toHaveLength(1);
 			expect(result[0].action.messageLog![0].tool_calls).toHaveLength(2);
 			expect(result[1].action.messageLog).toHaveLength(0);
+		});
+
+		it('should NOT group parallel tool calls when saveAnnouncements is disabled', () => {
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_1',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_1',
+							metadata: {
+								itemIndex: 0,
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: false,
+								},
+							},
+						},
+						data: {
+							data: {
+								ai_tool: [[{ json: { result: '4' } }]],
+							},
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Weather',
+							input: {
+								id: 'call_2',
+								input: { location: 'NYC' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_2',
+							metadata: {
+								itemIndex: 0,
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: false,
+								},
+							},
+						},
+						data: {
+							data: {
+								ai_tool: [[{ json: { temp: '72F' } }]],
+							},
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex) as ActionStepData[];
+
+			expect(result).toHaveLength(2);
+
+			// Each tool should have its own individual AIMessage (base commit behavior)
+			expect(result[0].action.messageLog).toHaveLength(1);
+			expect(result[0].action.messageLog![0].tool_calls).toHaveLength(1);
+			expect(result[0].action.messageLog![0].tool_calls![0].name).toBe('Calculator');
+
+			expect(result[1].action.messageLog).toHaveLength(1);
+			expect(result[1].action.messageLog![0].tool_calls).toHaveLength(1);
+			expect(result[1].action.messageLog![0].tool_calls![0].name).toBe('Weather');
+
+			// Both steps should have correct observations
+			expect(result[0].observation).toBe(JSON.stringify([{ result: '4' }]));
+			expect(result[1].observation).toBe(JSON.stringify([{ temp: '72F' }]));
+		});
+
+		it('should still group parallel Gemini tool calls even when saveAnnouncements is disabled', () => {
+			const response: EngineResponse<RequestResponseMetadata> = {
+				actionResponses: [
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Calculator',
+							input: {
+								id: 'call_1',
+								input: { expression: '2+2' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_1',
+							metadata: {
+								itemIndex: 0,
+								google: { thoughtSignature: 'shared_sig' },
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: false,
+								},
+							},
+						},
+						data: {
+							data: {
+								ai_tool: [[{ json: { result: '4' } }]],
+							},
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+					{
+						action: {
+							actionType: 'ExecutionNodeAction',
+							nodeName: 'Weather',
+							input: {
+								id: 'call_2',
+								input: { location: 'NYC' },
+							},
+							type: NodeConnectionTypes.AiTool,
+							id: 'call_2',
+							metadata: {
+								itemIndex: 0,
+								google: { thoughtSignature: 'shared_sig' },
+								options: {
+									enableStreaming: true,
+									saveAnnouncements: false,
+								},
+							},
+						},
+						data: {
+							data: {
+								ai_tool: [[{ json: { temp: '72F' } }]],
+							},
+							executionTime: 0,
+							startTime: 0,
+							executionIndex: 0,
+							source: [],
+						},
+					},
+				],
+				metadata: {},
+			};
+
+			const result = buildSteps(response, itemIndex) as ActionStepData[];
+
+			expect(result).toHaveLength(2);
+
+			// Gemini thought signatures ALWAYS require grouping for signature validity
+			expect(result[0].action.messageLog).toHaveLength(1);
+			expect(result[0].action.messageLog![0].tool_calls).toHaveLength(2);
+			expect(result[1].action.messageLog).toHaveLength(0);
+
+			const sigMap = result[0].action.messageLog![0].additional_kwargs
+				.__gemini_function_call_thought_signatures__ as Record<string, string>;
+			expect(sigMap).toEqual({ call_1: 'shared_sig' });
 		});
 
 		it('should not include additional_kwargs when no thought_signature present', () => {
