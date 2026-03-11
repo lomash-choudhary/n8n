@@ -749,11 +749,10 @@ describe('buildSteps', () => {
 			const result = buildSteps(response, itemIndex);
 			expect(result).toHaveLength(2);
 
-			// First entry: announcement step (display-only, always skipInMemory)
+			// First entry: announcement step (display-only, never saved to memory)
 			const announcement = result[0] as AnnouncementStepData;
 			expect(announcement.action.type).toBe('announcement');
 			expect(announcement.action.log).toBe('Calculating 2+2 now.');
-			expect(announcement.action.skipInMemory).toBe(true);
 			expect((result[0] as Partial<ActionStepData>).observation).toBeUndefined();
 
 			// Second entry: tool call step — announcement merged into AIMessage content
@@ -835,12 +834,11 @@ describe('buildSteps', () => {
 
 			const result = buildSteps(response, itemIndex);
 
-			// Announcement step exists for display only, always skipInMemory
+			// Announcement step exists for display only (never saved to memory)
 			expect(result).toHaveLength(2);
 			const announcement = result[0] as AnnouncementStepData;
 			expect(announcement.action.type).toBe('announcement');
 			expect(announcement.action.log).toBe('Let me calculate 2+2 for you.');
-			expect(announcement.action.skipInMemory).toBe(true);
 
 			// Tool call AIMessage content = announcement text, NOT "Calling Calculator with input:"
 			const toolStep = result[1] as ActionStepData;

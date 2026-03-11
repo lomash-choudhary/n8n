@@ -438,15 +438,14 @@ export function buildSteps(
 		// Extract clean announcement text from metadata
 		const announcement = tool.action.metadata?.announcement || '';
 
-		// Push a display-only announcement step for the first tool in the batch.
-		// Content is always skipInMemory since memory gets the announcement
-		// via the merged tool call AIMessage's messageLog instead.
+		// Push a scratchpad-only announcement step for the first tool in the batch.
+		// The text is already embedded as the tool call AIMessage's content (see messageLog
+		// below), so this step is never written to memory.
 		if (i === 0 && announcement && saveAnnouncements) {
 			steps.push({
 				action: {
 					type: 'announcement',
 					log: announcement,
-					skipInMemory: true,
 				},
 			});
 		}
