@@ -259,9 +259,11 @@ function buildSharedAIMessage(
 		type: 'tool_call' as const,
 	}));
 
-	const toolNames = processedTools.map((pt) => pt.nodeName).join(', ');
-
-	const content = contentOverride ?? `Calling tools: ${toolNames}`;
+	const content =
+		contentOverride ??
+		processedTools
+			.map((pt) => `Calling ${pt.toolName} with input: ${JSON.stringify(pt.toolInput)}`)
+			.join('\n');
 
 	return new AIMessage({
 		content,
@@ -296,9 +298,11 @@ function buildSharedGeminiAIMessage(
 		type: 'tool_call' as const,
 	}));
 
-	const toolNames = processedTools.map((pt) => pt.nodeName).join(', ');
-
-	const content = contentOverride ?? `Calling tools: ${toolNames}`;
+	const content =
+		contentOverride ??
+		processedTools
+			.map((pt) => `Calling ${pt.toolName} with input: ${JSON.stringify(pt.toolInput)}`)
+			.join('\n');
 
 	return new AIMessage({
 		content,
