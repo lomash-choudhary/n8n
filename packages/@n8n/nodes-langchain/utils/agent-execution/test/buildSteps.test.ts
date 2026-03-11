@@ -749,19 +749,20 @@ describe('buildSteps', () => {
 			const result = buildSteps(response, itemIndex);
 			expect(result).toHaveLength(2);
 
-			// First entry: announcement step (just type and log)
+			// First entry: announcement step (display-only, always skipInMemory)
 			const announcement = result[0] as AnnouncementStepData;
 			expect(announcement.action.type).toBe('announcement');
 			expect(announcement.action.log).toBe('Calculating 2+2 now.');
+			expect(announcement.action.skipInMemory).toBe(true);
 			expect((result[0] as Partial<ActionStepData>).observation).toBeUndefined();
 
-			// Second entry: tool call step — no duplicate announcement in messageLog
+			// Second entry: tool call step — announcement merged into AIMessage content
 			const toolStep = result[1] as ActionStepData;
 			expect(toolStep.action.type).toBe('tool_call');
 			expect(toolStep.action.tool).toBe('Calculator');
 			const messageLog = toolStep.action.messageLog;
 			expect(messageLog).toHaveLength(1);
-			expect(messageLog![0].content).toContain('Calling Calculator with input:');
+			expect(messageLog![0].content).toBe('Calculating 2+2 now.');
 		});
 
 		it('should not emit announcement step when announcement is empty', () => {
@@ -798,7 +799,7 @@ describe('buildSteps', () => {
 			expect(result[0].action.type).toBe('tool_call');
 		});
 
-		it('should merge announcement into tool call AIMessage when cleanToolCallContent is on', () => {
+		it('should merge announcement into tool call AIMessage when saveAnnouncements is on', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -817,7 +818,6 @@ describe('buildSteps', () => {
 								options: {
 									enableStreaming: true,
 									saveAnnouncements: true,
-									cleanToolCallContent: true,
 								},
 							},
 						},
@@ -835,7 +835,7 @@ describe('buildSteps', () => {
 
 			const result = buildSteps(response, itemIndex);
 
-			// Announcement step still exists for display, but marked skipInMemory
+			// Announcement step exists for display only, always skipInMemory
 			expect(result).toHaveLength(2);
 			const announcement = result[0] as AnnouncementStepData;
 			expect(announcement.action.type).toBe('announcement');
@@ -853,7 +853,7 @@ describe('buildSteps', () => {
 			expect(messageLog![0].tool_calls).toHaveLength(1);
 		});
 
-		it('should fall back to "Calling toolname" when cleanToolCallContent is on but no announcement', () => {
+		it('should fall back to "Calling toolname" when saveAnnouncements is on but no announcement text', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -871,7 +871,6 @@ describe('buildSteps', () => {
 								options: {
 									enableStreaming: true,
 									saveAnnouncements: true,
-									cleanToolCallContent: true,
 								},
 							},
 						},
@@ -892,7 +891,7 @@ describe('buildSteps', () => {
 			expect(result[0].action.messageLog![0].content).toContain('Calling Calculator with input:');
 		});
 
-		it('should keep separate announcement step when cleanToolCallContent is off', () => {
+		it('should not create announcement step when saveAnnouncements is off', () => {
 			const response: EngineResponse<RequestResponseMetadata> = {
 				actionResponses: [
 					{
@@ -910,8 +909,7 @@ describe('buildSteps', () => {
 								announcement: 'Let me calculate 2+2 for you.',
 								options: {
 									enableStreaming: true,
-									saveAnnouncements: true,
-									cleanToolCallContent: false,
+									saveAnnouncements: false,
 								},
 							},
 						},
@@ -929,11 +927,9 @@ describe('buildSteps', () => {
 
 			const result = buildSteps(response, itemIndex);
 
-			// Should have separate announcement step + tool call step (old behavior)
-			expect(result).toHaveLength(2);
-			expect(result[0].action.type).toBe('announcement');
-			expect(result[0].action.log).toBe('Let me calculate 2+2 for you.');
-			const toolStep = result[1] as ActionStepData;
+			// Only tool call step, no announcement
+			expect(result).toHaveLength(1);
+			const toolStep = result[0] as ActionStepData;
 			expect(toolStep.action.type).toBe('tool_call');
 			expect(toolStep.action.messageLog![0].content).toContain('Calling Calculator with input:');
 		});
