@@ -88,9 +88,15 @@ export async function runAgent(
 				metadata: buildResponseMetadata(response, itemIndex),
 			};
 		}
-		// Save conversation to memory including any tool call context
+		// Save conversation to memory including any tool call context.
+		// When saveAnnouncements is on, pass undefined so all steps are included in memory.
+		// When off or omitted (default), use previousCount to only save the latest tool batch.
 		if (memory && input && result?.output) {
-			await saveToMemory(input, result.output, memory, steps, undefined, options);
+			const previousCount =
+				options.saveAnnouncements === true
+					? undefined
+					: response?.metadata?.previousRequests?.length;
+			await saveToMemory(input, result.output, memory, steps, previousCount, options);
 		}
 
 		if (options.returnIntermediateSteps && steps.length > 0) {
@@ -108,14 +114,20 @@ export async function runAgent(
 		});
 
 		if ('returnValues' in modelResponse) {
-			// Save conversation to memory including any tool call context
+			// Save conversation to memory including any tool call context.
+			// When saveAnnouncements is on, pass undefined so all steps are included in memory.
+			// When off or omitted (default), use previousCount to only save the latest tool batch.
 			if (memory && input && modelResponse.returnValues.output) {
+				const previousCount =
+					options.saveAnnouncements === true
+						? undefined
+						: response?.metadata?.previousRequests?.length;
 				await saveToMemory(
 					input,
 					modelResponse.returnValues.output,
 					memory,
 					steps,
-					undefined,
+					previousCount,
 					options,
 				);
 			}
