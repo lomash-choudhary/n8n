@@ -33,6 +33,8 @@ export type AgentOptions = {
 	returnIntermediateSteps?: boolean;
 	passthroughBinaryImages?: boolean;
 	enableStreaming?: boolean;
+	saveAnnouncements?: boolean;
+	cleanToolCallContent?: boolean;
 	maxTokensFromMemory?: number;
 	tracingMetadata?: {
 		values?: TracingMetadataEntry[];

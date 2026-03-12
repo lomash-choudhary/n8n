@@ -12,12 +12,18 @@ export { createEngineRequests } from './createEngineRequests';
 export { buildResponseMetadata } from './buildResponseMetadata';
 export { buildSteps } from './buildSteps';
 export { processEventStream } from './processEventStream';
-export { loadMemory, saveToMemory, buildToolContext } from './memoryManagement';
+export {
+	loadMemory,
+	saveToMemory,
+	buildToolContext,
+} from './memoryManagement';
 export { processHitlResponses, type HitlProcessingResult } from './processHitlResponses';
 export { serializeIntermediateSteps } from './serializeIntermediateSteps';
 export type {
 	ToolCallRequest,
 	ToolCallData,
+	ActionStepData,
+	AnnouncementStepData,
 	AgentResult,
 	RequestResponseMetadata,
 	ToolMetadata,
